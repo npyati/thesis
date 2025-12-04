@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#ffffff">
+    <title>thesis</title>
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+    <link rel="stylesheet" href="styles.css">
+    <link rel="manifest" href="manifest.json">
+</head>
+<body>
+    <div id="editor" contenteditable="true" placeholder="Start writing..."></div>
+    <div id="command-modal" class="hidden">
+        <input type="text" id="command-search" placeholder="Search commands..." autocomplete="off">
+        <div id="command-list"></div>
+    </div>
+    <div id="save-modal" class="hidden modal-overlay">
+        <div class="modal-content">
+            <h3>Save Document</h3>
+            <input type="text" id="save-name-input" placeholder="Enter or select document name..." autocomplete="off">
+            <div id="save-list" class="document-list"></div>
+            <div class="modal-buttons">
+                <button id="save-confirm-button" class="modal-button primary">Save</button>
+                <button id="save-cancel-button" class="modal-button">Cancel</button>
+            </div>
+        </div>
+    </div>
+    <div id="load-modal" class="hidden modal-overlay">
+        <div class="modal-content">
+            <h3>Load Document</h3>
+            <input type="text" id="load-search" placeholder="Search documents..." autocomplete="off">
+            <div id="load-list" class="document-list"></div>
+            <div class="modal-buttons">
+                <button id="load-cancel-button" class="modal-button">Cancel</button>
+            </div>
+        </div>
+    </div>
+    <div id="font-modal" class="hidden modal-overlay">
+        <div class="modal-content">
+            <h3>Select Font</h3>
+            <input type="text" id="font-search" placeholder="Search fonts or type custom font name..." autocomplete="off">
+            <div id="font-list" class="font-list"></div>
+            <div class="modal-buttons">
+                <button id="font-cancel-button" class="modal-button">Cancel</button>
+            </div>
+        </div>
+    </div>
+    <div id="heading-modal" class="hidden modal-overlay">
+        <div class="modal-content">
+            <h3>Jump to Heading</h3>
+            <input type="text" id="heading-search" placeholder="Search headings..." autocomplete="off">
+            <div id="heading-list" class="heading-list"></div>
+            <div class="modal-buttons">
+                <button id="heading-cancel-button" class="modal-button">Cancel</button>
+            </div>
+        </div>
+    </div>
+    <div id="intro-modal" class="hidden modal-overlay">
+        <div class="modal-content intro-content">
+            <div id="intro-text"></div>
+        </div>
+    </div>
+    <div id="dialog-modal" class="hidden modal-overlay">
+        <div class="modal-content dialog-content">
+            <div id="dialog-message"></div>
+            <div class="modal-buttons">
+                <button id="dialog-confirm-button" class="modal-button primary">OK</button>
+                <button id="dialog-cancel-button" class="modal-button">Cancel</button>
+            </div>
+        </div>
+    </div>
+    <div id="word-count-display" class="hidden">
+        <span id="word-count">0 words</span>
+        <span class="separator">•</span>
+        <span id="char-count">0 characters</span>
+    </div>
+    <input type="file" id="markdown-file-input" accept=".md,.markdown" style="display: none;">
+    <script src="script.js"></script>
+</body>
+</html>
