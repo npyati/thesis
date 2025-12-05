@@ -443,6 +443,16 @@ const commands = [
         action: applyBlockQuote
     },
     {
+        name: "Strikethrough Last Word",
+        description: "Apply strikethrough to the last typed word (type xxxx)",
+        action: strikethroughLastWord
+    },
+    {
+        name: "Delete All Strikethrough",
+        description: "Remove all struck-through words from document",
+        action: deleteAllStrikethrough
+    },
+    {
         name: "Change Font",
         description: "Select font for the editor",
         action: openFontModal
@@ -539,6 +549,167 @@ let selectedCommandIndex = 0;
 // Function to apply formatting (bold or italic)
 function applyFormatting(command) {
     document.execCommand(command, false, null);
+    editor.focus();
+}
+
+// Function to delete all struck-through text in the document
+function deleteAllStrikethrough() {
+    const allBlocks = Array.from(editor.querySelectorAll('.block'));
+
+    allBlocks.forEach(block => {
+        const contentEl = block.querySelector('.block-content');
+        if (!contentEl) return;
+
+        // Find all strike elements
+        const strikes = contentEl.querySelectorAll('strike, s');
+
+        strikes.forEach(strike => {
+            // Remove the strike element completely (including its content)
+            strike.remove();
+        });
+    });
+
+    editor.focus();
+}
+
+// Function to strikethrough the last typed word
+function strikethroughLastWord(savedCursorOffset = null) {
+    const selection = window.getSelection();
+    if (!selection.rangeCount) return;
+
+    // Get the current block
+    const currentBlock = getCurrentBlock();
+    if (!currentBlock) return;
+
+    const contentEl = currentBlock.querySelector('.block-content');
+    if (!contentEl) return;
+
+    // Get all text content from the block
+    const fullText = contentEl.textContent;
+
+    // Get cursor position in the full text
+    const range = selection.getRangeAt(0);
+    let cursorOffset = savedCursorOffset;
+
+    if (cursorOffset === null) {
+        cursorOffset = 0;
+        // Calculate cursor position relative to the block content
+        const walker = document.createTreeWalker(
+            contentEl,
+            NodeFilter.SHOW_TEXT,
+            null,
+            false
+        );
+
+        let currentNode;
+        let found = false;
+        while (currentNode = walker.nextNode()) {
+            if (currentNode === range.startContainer) {
+                cursorOffset += range.startOffset;
+                found = true;
+                break;
+            }
+            cursorOffset += currentNode.textContent.length;
+        }
+
+        if (!found) {
+            cursorOffset = fullText.length;
+        }
+    }
+
+    // Find the last word before cursor (allowing trailing whitespace)
+    const textBeforeCursor = fullText.substring(0, cursorOffset);
+
+    // Match the last sequence of non-whitespace characters
+    const wordMatch = textBeforeCursor.match(/\S+(?=\s*$)/);
+
+    if (!wordMatch) return;
+
+    const word = wordMatch[0].trim(); // Extra safety: trim any whitespace
+    const wordStartOffset = textBeforeCursor.lastIndexOf(word);
+    const wordEndOffset = wordStartOffset + word.length;
+
+    // Double-check that we're not including whitespace
+    const extractedWord = fullText.substring(wordStartOffset, wordEndOffset);
+    if (extractedWord !== word || /\s/.test(extractedWord)) {
+        console.error('Word boundary error:', { word, extracted: extractedWord });
+        return;
+    }
+
+    // Now find the actual text nodes and positions for this word
+    let startNode = null, startOffset = 0;
+    let endNode = null, endOffset = 0;
+    let currentOffset = 0;
+
+    const walker2 = document.createTreeWalker(
+        contentEl,
+        NodeFilter.SHOW_TEXT,
+        null,
+        false
+    );
+
+    while (currentNode = walker2.nextNode()) {
+        const nodeLength = currentNode.textContent.length;
+
+        if (startNode === null && currentOffset + nodeLength > wordStartOffset) {
+            startNode = currentNode;
+            startOffset = wordStartOffset - currentOffset;
+        }
+
+        if (currentOffset + nodeLength >= wordEndOffset) {
+            endNode = currentNode;
+            endOffset = wordEndOffset - currentOffset;
+            break;
+        }
+
+        currentOffset += nodeLength;
+    }
+
+    if (!startNode || !endNode) return;
+
+    // Insert a marker element at cursor position to save it
+    const marker = document.createElement('span');
+    marker.id = 'cursor-marker-temp';
+    marker.style.display = 'inline';
+    marker.textContent = '';
+
+    const markerRange = range.cloneRange();
+    markerRange.collapse(true);
+    markerRange.insertNode(marker);
+
+    // Create a range for the word and select it
+    const wordRange = document.createRange();
+    wordRange.setStart(startNode, startOffset);
+    wordRange.setEnd(endNode, endOffset);
+
+    selection.removeAllRanges();
+    selection.addRange(wordRange);
+
+    // Apply strikethrough formatting
+    document.execCommand('strikethrough', false, null);
+
+    // Find the marker and restore cursor there
+    try {
+        const foundMarker = contentEl.querySelector('#cursor-marker-temp');
+        if (foundMarker && foundMarker.parentNode) {
+            // Insert a zero-width space before the marker to break formatting
+            const breakSpace = document.createTextNode('\u200B');
+            foundMarker.parentNode.insertBefore(breakSpace, foundMarker);
+
+            // Place cursor after the zero-width space
+            const finalRange = document.createRange();
+            finalRange.setStartAfter(breakSpace);
+            finalRange.collapse(true);
+            selection.removeAllRanges();
+            selection.addRange(finalRange);
+
+            // Remove the marker
+            foundMarker.remove();
+        }
+    } catch (e) {
+        console.error('Error restoring cursor:', e);
+    }
+
     editor.focus();
 }
 
@@ -2713,21 +2884,26 @@ editor.addEventListener("keydown", (event) => {
     if (event.altKey && !event.shiftKey && event.key === 'ArrowUp') {
         event.preventDefault();
 
-        const selectedBlocks = getSelectedBlocks();
-        const blocksToMove = selectedBlocks.length > 1 ? selectedBlocks : [getCurrentBlock()];
+        // Check multiBlockSelection first (from "/" command), then getSelectedBlocks (drag selection)
+        let blocksToMove;
+        if (multiBlockSelection.length > 0) {
+            blocksToMove = multiBlockSelection;
+        } else {
+            const selectedBlocks = getSelectedBlocks();
+            blocksToMove = selectedBlocks.length > 1 ? selectedBlocks : [getCurrentBlock()];
+        }
         if (blocksToMove[0] === null || blocksToMove.length === 0) return;
 
         // Can't move if first block doesn't have a previous sibling
         const firstBlock = blocksToMove[0];
         if (!firstBlock.previousElementSibling) return;
 
-        // Move all blocks up as a group
-        const previousBlock = firstBlock.previousElementSibling;
-        editor.insertBefore(firstBlock, previousBlock);
+        // Save reference to where we're inserting (before the previous block)
+        const targetBlock = firstBlock.previousElementSibling;
 
-        // If multiple blocks, move the rest after the first one
-        for (let i = 1; i < blocksToMove.length; i++) {
-            editor.insertBefore(blocksToMove[i], blocksToMove[i - 1].nextElementSibling);
+        // Move all blocks as a group by inserting each before the target
+        for (let i = 0; i < blocksToMove.length; i++) {
+            editor.insertBefore(blocksToMove[i], targetBlock);
         }
 
         updateNumberedBlocks();
@@ -2744,18 +2920,32 @@ editor.addEventListener("keydown", (event) => {
     if (event.altKey && !event.shiftKey && event.key === 'ArrowDown') {
         event.preventDefault();
 
-        const selectedBlocks = getSelectedBlocks();
-        const blocksToMove = selectedBlocks.length > 1 ? selectedBlocks : [getCurrentBlock()];
+        // Check multiBlockSelection first (from "/" command), then getSelectedBlocks (drag selection)
+        let blocksToMove;
+        if (multiBlockSelection.length > 0) {
+            blocksToMove = multiBlockSelection;
+        } else {
+            const selectedBlocks = getSelectedBlocks();
+            blocksToMove = selectedBlocks.length > 1 ? selectedBlocks : [getCurrentBlock()];
+        }
         if (blocksToMove[0] === null || blocksToMove.length === 0) return;
 
         // Can't move if last block doesn't have a next sibling
         const lastBlock = blocksToMove[blocksToMove.length - 1];
         if (!lastBlock.nextElementSibling) return;
 
-        // Move all blocks down as a group (move in reverse order to maintain order)
+        // Save reference to the block after which we want to insert
         const nextBlock = lastBlock.nextElementSibling;
+        const targetPosition = nextBlock.nextElementSibling; // null if nextBlock is last
+
+        // Move all blocks as a group by inserting each after the next block
+        // Insert in reverse order to maintain their relative order
         for (let i = blocksToMove.length - 1; i >= 0; i--) {
-            editor.insertBefore(blocksToMove[i], nextBlock.nextElementSibling);
+            if (targetPosition) {
+                editor.insertBefore(blocksToMove[i], targetPosition);
+            } else {
+                editor.appendChild(blocksToMove[i]);
+            }
         }
 
         updateNumberedBlocks();
@@ -3303,6 +3493,64 @@ editor.addEventListener("beforeinput", (event) => {
 
 // Update word count when editor content changes
 editor.addEventListener("input", (event) => {
+    // Check for "xxxx" trigger to strikethrough last word
+    const selection = window.getSelection();
+    if (selection.rangeCount > 0) {
+        const range = selection.getRangeAt(0);
+        const node = range.startContainer;
+
+        if (node.nodeType === Node.TEXT_NODE) {
+            const text = node.textContent;
+            const cursorPos = range.startOffset;
+
+            // Check if the last 4 characters before cursor are "xxxx"
+            if (cursorPos >= 4 && text.substring(cursorPos - 4, cursorPos) === 'xxxx') {
+                // Move cursor to before "xxxx"
+                const beforeXxxxRange = document.createRange();
+                beforeXxxxRange.setStart(node, cursorPos - 4);
+                beforeXxxxRange.collapse(true);
+                selection.removeAllRanges();
+                selection.addRange(beforeXxxxRange);
+
+                // Strikethrough the last word (which is before "xxxx")
+                strikethroughLastWord();
+
+                // Now remove the "xxxx"
+                // Search through all text nodes in the block to find and remove it
+                const currentBlock = getCurrentBlock();
+                if (currentBlock) {
+                    const contentEl = currentBlock.querySelector('.block-content');
+                    if (contentEl) {
+                        // Walk through all text nodes to find "xxxx"
+                        const walker = document.createTreeWalker(
+                            contentEl,
+                            NodeFilter.SHOW_TEXT,
+                            null,
+                            false
+                        );
+
+                        let textNode;
+                        while (textNode = walker.nextNode()) {
+                            const text = textNode.textContent;
+                            const xxxxIndex = text.indexOf('xxxx');
+
+                            if (xxxxIndex !== -1) {
+                                // Found it! Remove "xxxx"
+                                const before = text.substring(0, xxxxIndex);
+                                const after = text.substring(xxxxIndex + 4);
+                                textNode.textContent = before + after;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Return early to prevent other processing
+                return;
+            }
+        }
+    }
+
     // Clean up any <p> tags the browser might have inserted
     const unwantedPs = editor.querySelectorAll(':scope > p');
     unwantedPs.forEach(p => {
