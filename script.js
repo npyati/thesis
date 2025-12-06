@@ -523,6 +523,11 @@ const commands = [
         action: exportAsMarkdown
     },
     {
+        name: "Copy as Markdown",
+        description: "Copy content as Markdown to clipboard",
+        action: copyAsMarkdown
+    },
+    {
         name: "Import from Markdown",
         description: "Load content from Markdown file",
         action: importFromMarkdown
@@ -1538,6 +1543,93 @@ function exportAsMarkdown() {
     URL.revokeObjectURL(url);
 
     console.log('Markdown exported successfully');
+}
+
+// Function to copy content as Markdown to clipboard
+async function copyAsMarkdown() {
+    // Convert blocks to Markdown (same logic as exportAsMarkdown)
+    const blocks = editor.querySelectorAll('.block');
+    let markdown = '';
+    let numberedCounters = {}; // Track counters for each level
+
+    blocks.forEach(block => {
+        const type = block.dataset.type || 'text';
+        const level = parseInt(block.dataset.level) || 0;
+        const contentEl = block.querySelector('.block-content');
+        const content = contentEl ? contentEl.textContent.trim() : '';
+
+        // Empty text blocks should reset numbered counters and add spacing
+        if (!content && type === 'text') {
+            numberedCounters = {};
+            markdown += '\n';
+            return;
+        }
+
+        // Create indentation (2 spaces per level)
+        const indent = '  '.repeat(level);
+
+        switch (type) {
+            case 'heading1':
+                // Reset numbered counters when hitting non-numbered block
+                numberedCounters = {};
+                markdown += '# ' + content + '\n\n';
+                break;
+            case 'heading2':
+                // Reset numbered counters when hitting non-numbered block
+                numberedCounters = {};
+                markdown += '## ' + content + '\n\n';
+                break;
+            case 'heading3':
+                // Reset numbered counters when hitting non-numbered block
+                numberedCounters = {};
+                markdown += '### ' + content + '\n\n';
+                break;
+            case 'bullet':
+                // Reset numbered counters when hitting non-numbered block
+                numberedCounters = {};
+                markdown += indent + '- ' + content + '\n';
+                break;
+            case 'numbered':
+                // Initialize counter for this level if needed
+                if (!numberedCounters[level]) {
+                    numberedCounters[level] = 1;
+                } else {
+                    numberedCounters[level]++;
+                }
+                // Reset counters for deeper levels
+                Object.keys(numberedCounters).forEach(l => {
+                    if (parseInt(l) > level) {
+                        delete numberedCounters[l];
+                    }
+                });
+                markdown += indent + numberedCounters[level] + '. ' + content + '\n';
+                break;
+            case 'quote':
+                // Reset numbered counters when hitting non-numbered block
+                numberedCounters = {};
+                markdown += '> ' + content + '\n\n';
+                break;
+            case 'text':
+            default:
+                // Reset numbered counters when hitting non-numbered block
+                numberedCounters = {};
+                if (content) {
+                    markdown += content + '\n\n';
+                }
+                break;
+        }
+    });
+
+    // Clean up excessive line breaks (more than 2 consecutive newlines)
+    const cleanedMarkdown = markdown.replace(/\n{3,}/g, '\n\n').trim();
+
+    // Copy to clipboard
+    try {
+        await navigator.clipboard.writeText(cleanedMarkdown);
+        console.log('Markdown copied to clipboard');
+    } catch (err) {
+        console.error('Failed to copy to clipboard:', err);
+    }
 }
 
 // Function to convert Markdown to HTML
