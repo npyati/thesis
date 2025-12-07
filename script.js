@@ -2998,29 +2998,13 @@ function showCommandModal() {
 }
 
 // Function to hide command modal
-function hideCommandModal(keepSlash = false) {
+function hideCommandModal() {
     commandModalOpen = false;
     commandModal.classList.add("hidden");
 
-    // Remove the slash character if modal is closed without selection
-    if (slashPosition && !keepSlash) {
-        const selection = window.getSelection();
-        const range = document.createRange();
-        range.setStart(slashPosition.node, slashPosition.offset);
-        range.setEnd(slashPosition.node, slashPosition.offset + 1);
-        range.deleteContents();
-
-        // Position cursor where the slash was
-        range.setStart(slashPosition.node, slashPosition.offset);
-        range.collapse(true);
-        selection.removeAllRanges();
-        selection.addRange(range);
-
-        slashPosition = null;
-    } else if (keepSlash) {
-        // Keep the slash but clear the position
-        slashPosition = null;
-    }
+    // Clear the saved slash position
+    // (No need to remove slash character since it was never inserted)
+    slashPosition = null;
 
     // Clear multi-block selection when modal closes
     multiBlockSelection = [];
@@ -3062,57 +3046,22 @@ function renderCommands(filteredCommands) {
 
 // Function to execute a command
 function executeCommand(command) {
-    // Remove the slash and restore cursor position
+    // Restore cursor to the saved position (no slash to remove since it was never inserted)
     if (slashPosition && slashPosition.node) {
         try {
             const selection = window.getSelection();
+            const range = document.createRange();
 
             // Check if the node still exists in the document
-            if (slashPosition.node.nodeType === Node.TEXT_NODE &&
-                slashPosition.node.parentNode &&
-                document.contains(slashPosition.node)) {
-
-                const slashNode = slashPosition.node;
-                const parentNode = slashNode.parentNode;
-                const nextSibling = slashNode.nextSibling;
-
-                // If the slash is the only character in the node, remove the entire node
-                if (slashNode.textContent === '/') {
-                    // Place cursor where the slash node was before removing it
-                    const range = document.createRange();
-                    if (nextSibling) {
-                        range.setStart(nextSibling, 0);
-                    } else if (parentNode.lastChild) {
-                        range.setStartAfter(parentNode.lastChild);
-                    } else {
-                        range.setStart(parentNode, 0);
-                    }
-                    range.collapse(true);
-                    selection.removeAllRanges();
-                    selection.addRange(range);
-
-                    // Remove the slash node
-                    parentNode.removeChild(slashNode);
-                } else {
-                    // Remove just the slash character from the text
-                    const textContent = slashNode.textContent;
-                    const offset = slashPosition.offset;
-
-                    if (offset < textContent.length && textContent[offset] === '/') {
-                        const newText = textContent.substring(0, offset) + textContent.substring(offset + 1);
-                        slashNode.textContent = newText;
-
-                        // Place cursor where the slash was
-                        const range = document.createRange();
-                        range.setStart(slashNode, offset);
-                        range.collapse(true);
-                        selection.removeAllRanges();
-                        selection.addRange(range);
-                    }
-                }
+            if (document.contains(slashPosition.node)) {
+                // Restore cursor to where "/" key was pressed
+                range.setStart(slashPosition.node, slashPosition.offset);
+                range.collapse(true);
+                selection.removeAllRanges();
+                selection.addRange(range);
             }
         } catch (e) {
-            console.error("Error removing slash:", e);
+            console.error("Error restoring cursor position:", e);
         }
         slashPosition = null;
     }
@@ -3410,11 +3359,44 @@ editor.addEventListener("keydown", (event) => {
         return;
     }
 
-    // Handle ArrowUp - navigate to previous block
+    // Handle ArrowUp - navigate within multi-line blocks or to previous block
     if (event.key === 'ArrowUp' && !event.altKey && !event.shiftKey && !event.ctrlKey && !event.metaKey) {
+        const selection = window.getSelection();
+        if (!selection.rangeCount) return;
+
         const currentBlock = getCurrentBlock();
         if (!currentBlock) return;
 
+        const contentEl = currentBlock.querySelector('.block-content');
+        if (!contentEl) return;
+
+        const range = selection.getRangeAt(0);
+
+        // Get current cursor position
+        const rects = range.getClientRects();
+        if (rects.length === 0) return;
+
+        const currentRect = rects[0];
+        const currentX = currentRect.left;
+        const currentY = currentRect.top;
+
+        // Calculate target position (one line up)
+        const lineHeight = parseInt(window.getComputedStyle(contentEl).lineHeight) || 20;
+        const targetY = currentY - lineHeight;
+
+        // Try to find a position one line up
+        const targetRange = document.caretRangeFromPoint(currentX, targetY);
+
+        // Check if the target position is still within the same block-content
+        if (targetRange && contentEl.contains(targetRange.startContainer)) {
+            // We're still in the same block - move cursor there
+            event.preventDefault();
+            selection.removeAllRanges();
+            selection.addRange(targetRange);
+            return;
+        }
+
+        // We're at the first line - jump to previous block
         const previousBlock = currentBlock.previousElementSibling;
         if (previousBlock) {
             event.preventDefault();
@@ -3423,11 +3405,44 @@ editor.addEventListener("keydown", (event) => {
         }
     }
 
-    // Handle ArrowDown - navigate to next block
+    // Handle ArrowDown - navigate within multi-line blocks or to next block
     if (event.key === 'ArrowDown' && !event.altKey && !event.shiftKey && !event.ctrlKey && !event.metaKey) {
+        const selection = window.getSelection();
+        if (!selection.rangeCount) return;
+
         const currentBlock = getCurrentBlock();
         if (!currentBlock) return;
 
+        const contentEl = currentBlock.querySelector('.block-content');
+        if (!contentEl) return;
+
+        const range = selection.getRangeAt(0);
+
+        // Get current cursor position
+        const rects = range.getClientRects();
+        if (rects.length === 0) return;
+
+        const currentRect = rects[0];
+        const currentX = currentRect.left;
+        const currentY = currentRect.bottom; // Use bottom for down navigation
+
+        // Calculate target position (one line down)
+        const lineHeight = parseInt(window.getComputedStyle(contentEl).lineHeight) || 20;
+        const targetY = currentY + lineHeight;
+
+        // Try to find a position one line down
+        const targetRange = document.caretRangeFromPoint(currentX, targetY);
+
+        // Check if the target position is still within the same block-content
+        if (targetRange && contentEl.contains(targetRange.startContainer)) {
+            // We're still in the same block - move cursor there
+            event.preventDefault();
+            selection.removeAllRanges();
+            selection.addRange(targetRange);
+            return;
+        }
+
+        // We're at the last line - jump to next block
         const nextBlock = currentBlock.nextElementSibling;
         if (nextBlock) {
             event.preventDefault();
@@ -3671,11 +3686,12 @@ editor.addEventListener("keydown", (event) => {
                 savedSelection = selection.getRangeAt(0).cloneRange();
             }
 
+            slashPosition = null; // No slash position for multi-block
             showCommandModal();
             return;
         }
 
-        // Single block - normal behavior (insert "/" and open modal)
+        // Single block - save cursor position WITHOUT inserting "/" yet
         const selection = window.getSelection();
         let range;
 
@@ -3688,66 +3704,39 @@ editor.addEventListener("keydown", (event) => {
             range.collapse(false);
         }
 
-        // Handle empty editor case
-        if (editor.childNodes.length === 0 || (editor.childNodes.length === 1 && editor.childNodes[0].nodeType === Node.ELEMENT_NODE && editor.childNodes[0].hasAttribute('placeholder'))) {
-            const textNode = document.createTextNode("/");
-            editor.appendChild(textNode);
-
-            slashPosition = {
-                node: textNode,
-                offset: 0,
-                originalNode: editor,
-                originalOffset: 0
-            };
-
-            range.setStart(textNode, 1);
-            range.collapse(true);
-        } else {
-            // Store the original cursor position BEFORE inserting the slash
-            const originalNode = range.startContainer;
-            const originalOffset = range.startOffset;
-
-            // Insert the slash character
-            const textNode = document.createTextNode("/");
-            range.insertNode(textNode);
-
-            // Store both the slash position and the original cursor position
-            slashPosition = {
-                node: textNode,
-                offset: 0,
-                originalNode: originalNode,
-                originalOffset: originalOffset
-            };
-
-            range.setStartAfter(textNode);
-            range.collapse(true);
-        }
-
-        selection.removeAllRanges();
-        selection.addRange(range);
+        // Store the cursor position where "/" should be inserted if user presses space
+        slashPosition = {
+            node: range.startContainer,
+            offset: range.startOffset
+        };
 
         showCommandModal();
         return;
     }
 
-    // Close modal on space (keep the slash)
+    // Close modal on space (insert the slash now)
     if (event.key === " " && commandModalOpen) {
         event.preventDefault();
 
-        // Save slash position before hiding modal (which clears it)
-        const savedSlashPosition = slashPosition;
-        hideCommandModal(true); // Keep the slash
-
-        // Position cursor after the slash
-        if (savedSlashPosition && savedSlashPosition.node) {
+        // Insert the "/" character at the saved position
+        if (slashPosition && slashPosition.node) {
             const selection = window.getSelection();
             const range = document.createRange();
-            range.setStartAfter(savedSlashPosition.node);
+
+            // Insert "/" at the saved position
+            const textNode = document.createTextNode("/");
+            range.setStart(slashPosition.node, slashPosition.offset);
+            range.collapse(true);
+            range.insertNode(textNode);
+
+            // Position cursor after the slash
+            range.setStartAfter(textNode);
             range.collapse(true);
             selection.removeAllRanges();
             selection.addRange(range);
         }
 
+        hideCommandModal();
         editor.focus();
         return;
     }
@@ -3755,7 +3744,7 @@ editor.addEventListener("keydown", (event) => {
     // Close modal on / (slash) and remove the slash
     if (event.key === "/" && commandModalOpen) {
         event.preventDefault();
-        hideCommandModal(false); // Remove the slash
+        hideCommandModal();
         editor.focus();
         return;
     }
@@ -3810,31 +3799,36 @@ commandSearch.addEventListener("input", (event) => {
 
 // Handle keyboard navigation in command search
 commandSearch.addEventListener("keydown", (event) => {
-    // Close modal on space (keep the slash)
+    // Close modal on space (insert the slash now)
     if (event.key === " " && commandSearch.value === "") {
         event.preventDefault();
 
-        // Save slash position before hiding modal (which clears it)
-        const savedSlashPosition = slashPosition;
-        hideCommandModal(true); // Keep the slash
-
-        // Position cursor after the slash
-        if (savedSlashPosition && savedSlashPosition.node) {
+        // Insert the "/" character at the saved position
+        if (slashPosition && slashPosition.node) {
             const selection = window.getSelection();
             const range = document.createRange();
-            range.setStartAfter(savedSlashPosition.node);
+
+            // Insert "/" at the saved position
+            const textNode = document.createTextNode("/");
+            range.setStart(slashPosition.node, slashPosition.offset);
+            range.collapse(true);
+            range.insertNode(textNode);
+
+            // Position cursor after the slash
+            range.setStartAfter(textNode);
             range.collapse(true);
             selection.removeAllRanges();
             selection.addRange(range);
         }
 
+        hideCommandModal();
         editor.focus();
     }
 
     // Close modal on / (slash) and remove the slash
     if (event.key === "/") {
         event.preventDefault();
-        hideCommandModal(false); // Remove the slash
+        hideCommandModal();
         editor.focus();
     }
 
