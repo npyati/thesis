@@ -523,6 +523,11 @@ const commands = [
         action: exportAsMarkdown
     },
     {
+        name: "Export as Word",
+        description: "Download content as Word (.docx) file",
+        action: exportAsWord
+    },
+    {
         name: "Copy as Markdown",
         description: "Copy content as Markdown to clipboard",
         action: copyAsMarkdown
@@ -1630,6 +1635,471 @@ async function copyAsMarkdown() {
     } catch (err) {
         console.error('Failed to copy to clipboard:', err);
     }
+}
+
+// ===== DOCX Export Functions =====
+
+// Minimal ZIP file generator (no dependencies)
+function createZipBlob(files) {
+    // Helper: Convert string to Uint8Array with proper UTF-8 encoding
+    const textEncoder = new TextEncoder();
+    function str2bytes(str) {
+        return textEncoder.encode(str);
+    }
+
+    // Helper: Calculate CRC32
+    function crc32(bytes) {
+        let crc = 0xFFFFFFFF;
+        const table = [];
+
+        // Generate CRC table
+        for (let i = 0; i < 256; i++) {
+            let c = i;
+            for (let j = 0; j < 8; j++) {
+                c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+            }
+            table[i] = c;
+        }
+
+        // Calculate CRC
+        for (let i = 0; i < bytes.length; i++) {
+            crc = table[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);
+        }
+
+        return (crc ^ 0xFFFFFFFF) >>> 0;
+    }
+
+    // Helper: Write 32-bit little-endian
+    function write32(value) {
+        return new Uint8Array([
+            value & 0xFF,
+            (value >>> 8) & 0xFF,
+            (value >>> 16) & 0xFF,
+            (value >>> 24) & 0xFF
+        ]);
+    }
+
+    // Helper: Write 16-bit little-endian
+    function write16(value) {
+        return new Uint8Array([
+            value & 0xFF,
+            (value >>> 8) & 0xFF
+        ]);
+    }
+
+    const zipParts = [];
+    const centralDir = [];
+    let offset = 0;
+
+    // Process each file
+    files.forEach(file => {
+        const nameBytes = str2bytes(file.name);
+        const contentBytes = str2bytes(file.content);
+        const crc = crc32(contentBytes);
+
+        // Local file header
+        const localHeader = new Uint8Array(30 + nameBytes.length);
+        let pos = 0;
+
+        // Signature
+        localHeader.set([0x50, 0x4B, 0x03, 0x04], pos); pos += 4;
+        // Version needed
+        localHeader.set(write16(20), pos); pos += 2;
+        // Flags
+        localHeader.set(write16(0), pos); pos += 2;
+        // Compression method (0 = no compression)
+        localHeader.set(write16(0), pos); pos += 2;
+        // Mod time
+        localHeader.set(write16(0), pos); pos += 2;
+        // Mod date
+        localHeader.set(write16(0), pos); pos += 2;
+        // CRC32
+        localHeader.set(write32(crc), pos); pos += 4;
+        // Compressed size
+        localHeader.set(write32(contentBytes.length), pos); pos += 4;
+        // Uncompressed size
+        localHeader.set(write32(contentBytes.length), pos); pos += 4;
+        // Filename length
+        localHeader.set(write16(nameBytes.length), pos); pos += 2;
+        // Extra field length
+        localHeader.set(write16(0), pos); pos += 2;
+        // Filename
+        localHeader.set(nameBytes, pos);
+
+        zipParts.push(localHeader);
+        zipParts.push(contentBytes);
+
+        // Central directory entry
+        const centralHeader = new Uint8Array(46 + nameBytes.length);
+        pos = 0;
+
+        // Signature
+        centralHeader.set([0x50, 0x4B, 0x01, 0x02], pos); pos += 4;
+        // Version made by
+        centralHeader.set(write16(20), pos); pos += 2;
+        // Version needed
+        centralHeader.set(write16(20), pos); pos += 2;
+        // Flags
+        centralHeader.set(write16(0), pos); pos += 2;
+        // Compression method
+        centralHeader.set(write16(0), pos); pos += 2;
+        // Mod time
+        centralHeader.set(write16(0), pos); pos += 2;
+        // Mod date
+        centralHeader.set(write16(0), pos); pos += 2;
+        // CRC32
+        centralHeader.set(write32(crc), pos); pos += 4;
+        // Compressed size
+        centralHeader.set(write32(contentBytes.length), pos); pos += 4;
+        // Uncompressed size
+        centralHeader.set(write32(contentBytes.length), pos); pos += 4;
+        // Filename length
+        centralHeader.set(write16(nameBytes.length), pos); pos += 2;
+        // Extra field length
+        centralHeader.set(write16(0), pos); pos += 2;
+        // Comment length
+        centralHeader.set(write16(0), pos); pos += 2;
+        // Disk number
+        centralHeader.set(write16(0), pos); pos += 2;
+        // Internal attributes
+        centralHeader.set(write16(0), pos); pos += 2;
+        // External attributes
+        centralHeader.set(write32(0), pos); pos += 4;
+        // Offset
+        centralHeader.set(write32(offset), pos); pos += 4;
+        // Filename
+        centralHeader.set(nameBytes, pos);
+
+        centralDir.push(centralHeader);
+        offset += localHeader.length + contentBytes.length;
+    });
+
+    // Combine central directory
+    const centralDirSize = centralDir.reduce((sum, arr) => sum + arr.length, 0);
+    const centralDirOffset = offset;
+
+    // End of central directory
+    const eocd = new Uint8Array(22);
+    pos = 0;
+    // Signature
+    eocd.set([0x50, 0x4B, 0x05, 0x06], pos); pos += 4;
+    // Disk number
+    eocd.set(write16(0), pos); pos += 2;
+    // Central dir disk
+    eocd.set(write16(0), pos); pos += 2;
+    // Entries on this disk
+    eocd.set(write16(files.length), pos); pos += 2;
+    // Total entries
+    eocd.set(write16(files.length), pos); pos += 2;
+    // Central dir size
+    eocd.set(write32(centralDirSize), pos); pos += 4;
+    // Central dir offset
+    eocd.set(write32(centralDirOffset), pos); pos += 4;
+    // Comment length
+    eocd.set(write16(0), pos);
+
+    // Combine all parts
+    const totalLength = zipParts.reduce((sum, arr) => sum + arr.length, 0) + centralDirSize + eocd.length;
+    const zipData = new Uint8Array(totalLength);
+
+    let currentOffset = 0;
+    zipParts.forEach(part => {
+        zipData.set(part, currentOffset);
+        currentOffset += part.length;
+    });
+    centralDir.forEach(part => {
+        zipData.set(part, currentOffset);
+        currentOffset += part.length;
+    });
+    zipData.set(eocd, currentOffset);
+
+    return new Blob([zipData], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+}
+
+// Generate DOCX XML content
+function generateDocxXml(blocks) {
+    let xml = '';
+    let numberedCounters = {};
+
+    blocks.forEach(block => {
+        const type = block.dataset.type || 'text';
+        const level = parseInt(block.dataset.level) || 0;
+        const contentEl = block.querySelector('.block-content');
+        const content = contentEl ? contentEl.textContent.trim() : '';
+
+        if (!content && type === 'text') {
+            numberedCounters = {};
+            // Empty paragraph
+            xml += '<w:p><w:pPr></w:pPr></w:p>';
+            return;
+        }
+
+        // Escape XML special characters
+        const escapedContent = content
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&apos;');
+
+        const indentLeft = level * 720; // 720 twips = 0.5 inch
+
+        switch (type) {
+            case 'heading1':
+                numberedCounters = {};
+                xml += `<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>${escapedContent}</w:t></w:r></w:p>`;
+                break;
+            case 'heading2':
+                numberedCounters = {};
+                xml += `<w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t>${escapedContent}</w:t></w:r></w:p>`;
+                break;
+            case 'heading3':
+                numberedCounters = {};
+                xml += `<w:p><w:pPr><w:pStyle w:val="Heading3"/></w:pPr><w:r><w:t>${escapedContent}</w:t></w:r></w:p>`;
+                break;
+            case 'bullet':
+                numberedCounters = {};
+                xml += `<w:p><w:pPr><w:pStyle w:val="ListParagraph"/><w:numPr><w:ilvl w:val="${level}"/><w:numId w:val="1"/></w:numPr><w:ind w:left="${indentLeft}"/></w:pPr><w:r><w:t>${escapedContent}</w:t></w:r></w:p>`;
+                break;
+            case 'numbered':
+                if (!numberedCounters[level]) {
+                    numberedCounters[level] = 1;
+                } else {
+                    numberedCounters[level]++;
+                }
+                Object.keys(numberedCounters).forEach(l => {
+                    if (parseInt(l) > level) {
+                        delete numberedCounters[l];
+                    }
+                });
+                xml += `<w:p><w:pPr><w:pStyle w:val="ListParagraph"/><w:numPr><w:ilvl w:val="${level}"/><w:numId w:val="2"/></w:numPr><w:ind w:left="${indentLeft}"/></w:pPr><w:r><w:t>${escapedContent}</w:t></w:r></w:p>`;
+                break;
+            case 'quote':
+                numberedCounters = {};
+                xml += `<w:p><w:pPr><w:pStyle w:val="Quote"/></w:pPr><w:r><w:t>${escapedContent}</w:t></w:r></w:p>`;
+                break;
+            case 'text':
+            default:
+                numberedCounters = {};
+                if (content) {
+                    xml += `<w:p><w:r><w:t>${escapedContent}</w:t></w:r></w:p>`;
+                }
+                break;
+        }
+    });
+
+    return xml;
+}
+
+// Generate complete DOCX document.xml
+function generateDocumentXml(bodyContent) {
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<w:body>${bodyContent}</w:body>
+</w:document>`;
+}
+
+// Generate [Content_Types].xml
+function generateContentTypes() {
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+<Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
+</Types>`;
+}
+
+// Generate _rels/.rels
+function generateRootRels() {
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`;
+}
+
+// Generate word/_rels/document.xml.rels
+function generateDocumentRels() {
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>
+</Relationships>`;
+}
+
+// Generate word/styles.xml
+function generateStyles() {
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:style w:type="paragraph" w:styleId="Normal">
+<w:name w:val="Normal"/>
+<w:qFormat/>
+</w:style>
+<w:style w:type="paragraph" w:styleId="Heading1">
+<w:name w:val="Heading 1"/>
+<w:basedOn w:val="Normal"/>
+<w:next w:val="Normal"/>
+<w:qFormat/>
+<w:pPr>
+<w:spacing w:before="240" w:after="120"/>
+</w:pPr>
+<w:rPr>
+<w:b/>
+<w:sz w:val="32"/>
+</w:rPr>
+</w:style>
+<w:style w:type="paragraph" w:styleId="Heading2">
+<w:name w:val="Heading 2"/>
+<w:basedOn w:val="Normal"/>
+<w:next w:val="Normal"/>
+<w:qFormat/>
+<w:pPr>
+<w:spacing w:before="200" w:after="100"/>
+</w:pPr>
+<w:rPr>
+<w:b/>
+<w:sz w:val="28"/>
+</w:rPr>
+</w:style>
+<w:style w:type="paragraph" w:styleId="Heading3">
+<w:name w:val="Heading 3"/>
+<w:basedOn w:val="Normal"/>
+<w:next w:val="Normal"/>
+<w:qFormat/>
+<w:pPr>
+<w:spacing w:before="160" w:after="80"/>
+</w:pPr>
+<w:rPr>
+<w:b/>
+<w:sz w:val="24"/>
+</w:rPr>
+</w:style>
+<w:style w:type="paragraph" w:styleId="Quote">
+<w:name w:val="Quote"/>
+<w:basedOn w:val="Normal"/>
+<w:pPr>
+<w:ind w:left="720"/>
+</w:pPr>
+<w:rPr>
+<w:i/>
+</w:rPr>
+</w:style>
+<w:style w:type="paragraph" w:styleId="ListParagraph">
+<w:name w:val="List Paragraph"/>
+<w:basedOn w:val="Normal"/>
+</w:style>
+</w:styles>`;
+}
+
+// Generate word/numbering.xml
+function generateNumbering() {
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:abstractNum w:abstractNumId="0">
+<w:multiLevelType w:val="hybridMultilevel"/>
+<w:lvl w:ilvl="0">
+<w:start w:val="1"/>
+<w:numFmt w:val="bullet"/>
+<w:lvlText w:val="•"/>
+<w:lvlJc w:val="left"/>
+<w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr>
+</w:lvl>
+<w:lvl w:ilvl="1">
+<w:start w:val="1"/>
+<w:numFmt w:val="bullet"/>
+<w:lvlText w:val="○"/>
+<w:lvlJc w:val="left"/>
+<w:pPr><w:ind w:left="1440" w:hanging="360"/></w:pPr>
+</w:lvl>
+<w:lvl w:ilvl="2">
+<w:start w:val="1"/>
+<w:numFmt w:val="bullet"/>
+<w:lvlText w:val="■"/>
+<w:lvlJc w:val="left"/>
+<w:pPr><w:ind w:left="2160" w:hanging="360"/></w:pPr>
+</w:lvl>
+</w:abstractNum>
+<w:abstractNum w:abstractNumId="1">
+<w:multiLevelType w:val="hybridMultilevel"/>
+<w:lvl w:ilvl="0">
+<w:start w:val="1"/>
+<w:numFmt w:val="decimal"/>
+<w:lvlText w:val="%1."/>
+<w:lvlJc w:val="left"/>
+<w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr>
+</w:lvl>
+<w:lvl w:ilvl="1">
+<w:start w:val="1"/>
+<w:numFmt w:val="decimal"/>
+<w:lvlText w:val="%2."/>
+<w:lvlJc w:val="left"/>
+<w:pPr><w:ind w:left="1440" w:hanging="360"/></w:pPr>
+</w:lvl>
+<w:lvl w:ilvl="2">
+<w:start w:val="1"/>
+<w:numFmt w:val="decimal"/>
+<w:lvlText w:val="%3."/>
+<w:lvlJc w:val="left"/>
+<w:pPr><w:ind w:left="2160" w:hanging="360"/></w:pPr>
+</w:lvl>
+</w:abstractNum>
+<w:num w:numId="1">
+<w:abstractNumId w:val="0"/>
+</w:num>
+<w:num w:numId="2">
+<w:abstractNumId w:val="1"/>
+</w:num>
+</w:numbering>`;
+}
+
+// Generate filename for Word export
+function generateWordFilename() {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const seconds = String(now.getSeconds()).padStart(2, '0');
+
+    return `document_${year}-${month}-${day}_${hours}-${minutes}-${seconds}.docx`;
+}
+
+// Main export function
+function exportAsWord() {
+    const blocks = editor.querySelectorAll('.block');
+    const bodyContent = generateDocxXml(blocks);
+    const documentXml = generateDocumentXml(bodyContent);
+
+    // Create DOCX structure
+    const files = [
+        { name: '[Content_Types].xml', content: generateContentTypes() },
+        { name: '_rels/.rels', content: generateRootRels() },
+        { name: 'word/document.xml', content: documentXml },
+        { name: 'word/_rels/document.xml.rels', content: generateDocumentRels() },
+        { name: 'word/styles.xml', content: generateStyles() },
+        { name: 'word/numbering.xml', content: generateNumbering() }
+    ];
+
+    // Create ZIP blob
+    const blob = createZipBlob(files);
+
+    // Create download link
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = generateWordFilename();
+
+    // Trigger download
+    document.body.appendChild(a);
+    a.click();
+
+    // Cleanup
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    console.log('Word document exported successfully');
 }
 
 // Function to convert Markdown to HTML
