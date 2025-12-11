@@ -205,6 +205,8 @@ let currentLineHeight = 1.6; // Default line height
 let typewriterMode = false;
 let focusMode = false;
 let multiBlockSelection = []; // Store blocks when multi-block operation is triggered
+let currentDocumentName = null; // Track the currently loaded/saved document
+let filteredCommandsList = []; // Store the currently filtered commands for keyboard navigation
 
 // Available fonts
 const availableFonts = [
@@ -1165,6 +1167,7 @@ async function clearAll() {
     const confirmed = await showConfirm("Are you sure you want to clear all text?");
     if (confirmed) {
         editor.innerHTML = "";
+        currentDocumentName = null; // Clear current document pointer
 
         // Create a new empty block
         const firstBlock = createBlockElement('text', '');
@@ -2387,7 +2390,12 @@ markdownFileInput.addEventListener('change', (event) => {
 // Function to get list of saved documents
 function getSavedDocuments() {
     const docsJson = localStorage.getItem("savedDocuments");
-    return docsJson ? JSON.parse(docsJson) : [];
+    const docs = docsJson ? JSON.parse(docsJson) : [];
+
+    // Sort by timestamp, most recent first
+    docs.sort((a, b) => b.timestamp - a.timestamp);
+
+    return docs;
 }
 
 // Function to save list of documents
@@ -2474,6 +2482,7 @@ function performSave() {
 
     localStorage.setItem(`doc_${docName}`, content);
     setSavedDocuments(docs);
+    currentDocumentName = docName; // Track current document
     console.log(`Document "${docName}" saved`);
 
     saveModal.classList.add("hidden");
@@ -2486,6 +2495,28 @@ function performSave() {
         selection.addRange(savedSelection);
         savedSelection = null;
     }
+}
+
+// Function to quickly save to the current document
+function quickSave() {
+    if (!currentDocumentName) {
+        // No current document - open save dialog
+        saveDocumentAs();
+        return;
+    }
+
+    const content = editor.innerHTML;
+    const docs = getSavedDocuments();
+
+    // Update timestamp for existing document
+    const existingIndex = docs.findIndex(d => d.name === currentDocumentName);
+    if (existingIndex >= 0) {
+        docs[existingIndex].timestamp = Date.now();
+    }
+
+    localStorage.setItem(`doc_${currentDocumentName}`, content);
+    setSavedDocuments(docs);
+    console.log(`Document "${currentDocumentName}" saved`);
 }
 
 // Function to load a saved document
@@ -2542,6 +2573,7 @@ async function loadDocumentByName(docName) {
     const content = localStorage.getItem(`doc_${docName}`);
     if (content) {
         editor.innerHTML = content;
+        currentDocumentName = docName; // Track current document
         console.log(`Document "${docName}" loaded`);
         loadModal.classList.add("hidden");
         editor.focus();
@@ -3025,7 +3057,12 @@ function renderCommands(filteredCommands) {
 
         const commandName = document.createElement("div");
         commandName.className = "command-name";
-        commandName.textContent = command.name;
+        // Use innerHTML for commands with HTML (like quick save), textContent for others
+        if (command.isQuickSave) {
+            commandName.innerHTML = command.name;
+        } else {
+            commandName.textContent = command.name;
+        }
 
         const commandDesc = document.createElement("div");
         commandDesc.className = "command-description";
@@ -3101,6 +3138,25 @@ function filterCommands(searchTerm) {
         const bTime = commandUsage[b.name] || 0;
         return bTime - aTime; // Most recent first
     });
+
+    // Add quick save command at the top if there's a current document
+    if (currentDocumentName) {
+        const quickSaveCommand = {
+            name: `Save to <em style="font-style: italic; opacity: 0.75;">${currentDocumentName}</em>`,
+            description: "Quick save to current document (Cmd+S)",
+            action: quickSave,
+            isQuickSave: true
+        };
+
+        // Only show if it matches search or if search is empty
+        if (!searchTerm ||
+            `save to ${currentDocumentName}`.toLowerCase().includes(searchTerm.toLowerCase())) {
+            filtered.unshift(quickSaveCommand);
+        }
+    }
+
+    // Store filtered commands globally for keyboard navigation
+    filteredCommandsList = filtered;
 
     selectedCommandIndex = 0;
     renderCommands(filtered);
@@ -3663,6 +3719,13 @@ editor.addEventListener("keydown", (event) => {
         }
     }
 
+    // Handle quick save shortcut (Cmd+S / Ctrl+S)
+    if ((event.metaKey || event.ctrlKey) && event.key === 's') {
+        event.preventDefault();
+        quickSave();
+        return;
+    }
+
     // Handle fullscreen shortcut (F11)
     if (event.key === 'F11') {
         event.preventDefault();
@@ -3771,23 +3834,9 @@ editor.addEventListener("keydown", (event) => {
     // Execute command on Enter
     if (commandModalOpen && event.key === "Enter") {
         event.preventDefault();
-        const commandItems = commandList.querySelectorAll(".command-item:not(.no-results)");
-        if (commandItems[selectedCommandIndex]) {
-            const searchTerm = commandSearch.value.toLowerCase();
-            const commandUsage = JSON.parse(localStorage.getItem('commandUsage') || '{}');
-            const filtered = commands.filter(cmd =>
-                cmd.name.toLowerCase().includes(searchTerm) ||
-                cmd.description.toLowerCase().includes(searchTerm)
-            );
-            // Sort by MRU
-            filtered.sort((a, b) => {
-                const aTime = commandUsage[a.name] || 0;
-                const bTime = commandUsage[b.name] || 0;
-                return bTime - aTime;
-            });
-            if (filtered[selectedCommandIndex]) {
-                executeCommand(filtered[selectedCommandIndex]);
-            }
+        // Use the globally stored filtered commands list
+        if (filteredCommandsList[selectedCommandIndex]) {
+            executeCommand(filteredCommandsList[selectedCommandIndex]);
         }
     }
 });
@@ -3854,20 +3903,9 @@ commandSearch.addEventListener("keydown", (event) => {
     // Execute command on Enter
     if (event.key === "Enter") {
         event.preventDefault();
-        const searchTerm = commandSearch.value.toLowerCase();
-        const commandUsage = JSON.parse(localStorage.getItem('commandUsage') || '{}');
-        const filtered = commands.filter(cmd =>
-            cmd.name.toLowerCase().includes(searchTerm) ||
-            cmd.description.toLowerCase().includes(searchTerm)
-        );
-        // Sort by MRU
-        filtered.sort((a, b) => {
-            const aTime = commandUsage[a.name] || 0;
-            const bTime = commandUsage[b.name] || 0;
-            return bTime - aTime;
-        });
-        if (filtered[selectedCommandIndex]) {
-            executeCommand(filtered[selectedCommandIndex]);
+        // Use the globally stored filtered commands list
+        if (filteredCommandsList[selectedCommandIndex]) {
+            executeCommand(filteredCommandsList[selectedCommandIndex]);
         }
     }
 });
