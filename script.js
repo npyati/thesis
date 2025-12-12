@@ -260,13 +260,14 @@ const availableFonts = [
 ];
 
 // Intro content
-const introHTML = `<p><strong>thesis</strong> is a minimalist word processor.</p>
+const introHTML = `<p><strong>thesis</strong> is a minimalist text editor.</p>
 <p>It's designed for focus and creativity.</p>
 <p>The whole thing works primarily through the keyboard. You shouldn't have to use the mouse.</p>
 <p>Here are the basics</p>
 <ul>
 <li>Type / to open a popup menu of commands. Use arrow keys or search to pick one. When search returns only one command, pressing [enter] will execute.</li>
 <li>Type / again to close the popup. Press [space] at the empty prompt to keep the /.</li>
+<li>Nothing is sent or saved online. All documents are stored locally in your browser.</li>
 </ul>
 <p>That's enough for now. You can find the rest by exploring. There isn't much - just what's necessary.</p>
 <p><strong>This is a work in progress.</strong> There are still plenty of bugs to fix and improvements to make. Send me a note if you have ideas.</p>`;
