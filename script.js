@@ -189,6 +189,9 @@ const dialogModal = document.getElementById("dialog-modal");
 const dialogMessage = document.getElementById("dialog-message");
 const dialogConfirmButton = document.getElementById("dialog-confirm-button");
 const dialogCancelButton = document.getElementById("dialog-cancel-button");
+const deletedDocModal = document.getElementById("deleted-doc-modal");
+const deletedDocMessage = document.getElementById("deleted-doc-message");
+const deletedDocOkButton = document.getElementById("deleted-doc-ok-button");
 
 let commandModalOpen = false;
 let slashPosition = null;
@@ -528,6 +531,11 @@ const commands = [
         name: "Export as Word",
         description: "Download content as Word (.docx) file",
         action: exportAsWord
+    },
+    {
+        name: "Export All as Markdown",
+        description: "Download all saved documents as .md files in a ZIP",
+        action: exportAllAsMarkdown
     },
     {
         name: "Copy as Markdown",
@@ -1169,6 +1177,9 @@ async function clearAll() {
         editor.innerHTML = "";
         currentDocumentName = null; // Clear current document pointer
 
+        // Clear URL parameter
+        clearURL();
+
         // Create a new empty block
         const firstBlock = createBlockElement('text', '');
         editor.appendChild(firstBlock);
@@ -1455,10 +1466,12 @@ function generateMarkdownFilename() {
     return `document_${year}-${month}-${day}_${hours}-${minutes}-${seconds}.md`;
 }
 
-// Function to export as Markdown
-function exportAsMarkdown() {
-    // Convert blocks to Markdown
-    const blocks = editor.querySelectorAll('.block');
+// Helper function to convert HTML content to Markdown
+function htmlToMarkdown(htmlContent) {
+    // Create a temporary container to parse the HTML
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = htmlContent;
+    const blocks = tempDiv.querySelectorAll('.block');
     let markdown = '';
     let numberedCounters = {}; // Track counters for each level
 
@@ -1531,10 +1544,15 @@ function exportAsMarkdown() {
     });
 
     // Clean up excessive line breaks (more than 2 consecutive newlines)
-    const cleanedMarkdown = markdown.replace(/\n{3,}/g, '\n\n').trim();
+    return markdown.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+// Function to export as Markdown
+function exportAsMarkdown() {
+    const markdown = htmlToMarkdown(editor.innerHTML);
 
     // Create blob
-    const blob = new Blob([cleanedMarkdown], { type: 'text/markdown' });
+    const blob = new Blob([markdown], { type: 'text/markdown' });
 
     // Create download link
     const url = URL.createObjectURL(blob);
@@ -1551,6 +1569,56 @@ function exportAsMarkdown() {
     URL.revokeObjectURL(url);
 
     console.log('Markdown exported successfully');
+}
+
+// Function to export all saved documents as Markdown files in a ZIP
+async function exportAllAsMarkdown() {
+    const docs = getSavedDocuments();
+
+    if (docs.length === 0) {
+        await showAlert("No saved documents to export.");
+        return;
+    }
+
+    const files = [];
+
+    // Convert each saved document to markdown
+    docs.forEach(doc => {
+        const htmlContent = localStorage.getItem(`doc_${doc.name}`);
+        if (htmlContent) {
+            const markdown = htmlToMarkdown(htmlContent);
+            // Create safe filename (replace invalid characters)
+            const safeFilename = doc.name.replace(/[^a-z0-9_-]/gi, '_');
+            files.push({
+                name: `${safeFilename}.md`,
+                content: markdown
+            });
+        }
+    });
+
+    // Create ZIP blob using the existing ZIP generator
+    const zipBlob = createZipBlob(files);
+
+    // Generate filename with timestamp
+    const now = new Date();
+    const timestamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const zipFilename = `thesis_documents_${timestamp}.zip`;
+
+    // Create download link
+    const url = URL.createObjectURL(zipBlob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = zipFilename;
+
+    // Trigger download
+    document.body.appendChild(a);
+    a.click();
+
+    // Cleanup
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    console.log(`Exported ${files.length} documents as ${zipFilename}`);
 }
 
 // Function to copy content as Markdown to clipboard
@@ -2464,6 +2532,31 @@ function saveDocumentAs() {
     setTimeout(() => saveNameInput.focus(), 0);
 }
 
+// Function to generate a unique document ID
+function generateDocumentId() {
+    return Date.now().toString(36) + Math.random().toString(36).substring(2, 11);
+}
+
+// Function to update URL with document ID
+function updateURL(docId) {
+    const url = new URL(window.location);
+    url.searchParams.set('id', docId);
+    window.history.pushState({}, '', url);
+}
+
+// Function to clear URL parameter
+function clearURL() {
+    const url = new URL(window.location);
+    url.searchParams.delete('id');
+    window.history.pushState({}, '', url);
+}
+
+// Function to get document ID from URL
+function getDocIdFromURL() {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('id');
+}
+
 // Function to perform the actual save
 function performSave() {
     const docName = saveNameInput.value.trim();
@@ -2472,18 +2565,26 @@ function performSave() {
     const content = editor.innerHTML;
     const docs = getSavedDocuments();
 
+    let docId;
     // Check if document already exists
     const existingIndex = docs.findIndex(d => d.name === docName);
     if (existingIndex >= 0) {
         docs[existingIndex].timestamp = Date.now();
+        docId = docs[existingIndex].id;
     } else {
-        docs.push({ name: docName, timestamp: Date.now() });
+        docId = generateDocumentId();
+        docs.push({ id: docId, name: docName, timestamp: Date.now() });
     }
 
+    // Store by both ID and name for backward compatibility
     localStorage.setItem(`doc_${docName}`, content);
+    localStorage.setItem(`docById_${docId}`, JSON.stringify({ name: docName, content: content }));
     setSavedDocuments(docs);
     currentDocumentName = docName; // Track current document
-    console.log(`Document "${docName}" saved`);
+    console.log(`Document "${docName}" saved with ID: ${docId}`);
+
+    // Update URL with document ID
+    updateURL(docId);
 
     saveModal.classList.add("hidden");
     editor.focus();
@@ -2512,11 +2613,22 @@ function quickSave() {
     const existingIndex = docs.findIndex(d => d.name === currentDocumentName);
     if (existingIndex >= 0) {
         docs[existingIndex].timestamp = Date.now();
-    }
+        const docId = docs[existingIndex].id;
 
-    localStorage.setItem(`doc_${currentDocumentName}`, content);
-    setSavedDocuments(docs);
-    console.log(`Document "${currentDocumentName}" saved`);
+        // Store by both ID and name
+        localStorage.setItem(`doc_${currentDocumentName}`, content);
+        localStorage.setItem(`docById_${docId}`, JSON.stringify({ name: currentDocumentName, content: content }));
+        setSavedDocuments(docs);
+
+        // Update URL with document ID
+        updateURL(docId);
+
+        console.log(`Document "${currentDocumentName}" saved with ID: ${docId}`);
+    } else {
+        localStorage.setItem(`doc_${currentDocumentName}`, content);
+        setSavedDocuments(docs);
+        console.log(`Document "${currentDocumentName}" saved`);
+    }
 }
 
 // Function to load a saved document
@@ -2574,6 +2686,14 @@ async function loadDocumentByName(docName) {
     if (content) {
         editor.innerHTML = content;
         currentDocumentName = docName; // Track current document
+
+        // Update URL with document ID
+        const docs = getSavedDocuments();
+        const doc = docs.find(d => d.name === docName);
+        if (doc && doc.id) {
+            updateURL(doc.id);
+        }
+
         console.log(`Document "${docName}" loaded`);
         loadModal.classList.add("hidden");
         editor.focus();
@@ -2591,6 +2711,41 @@ function filterDocuments() {
     );
     selectedLoadIndex = 0;
     renderDocuments(filtered);
+}
+
+// Function to show deleted document modal
+function showDeletedDocModal() {
+    deletedDocModal.classList.remove("hidden");
+}
+
+// Function to load document by ID from URL
+async function loadDocumentById(docId) {
+    const docData = localStorage.getItem(`docById_${docId}`);
+    if (docData) {
+        try {
+            const { name, content } = JSON.parse(docData);
+            // Verify the document still exists in the saved documents list
+            const docs = getSavedDocuments();
+            const doc = docs.find(d => d.id === docId);
+            if (doc) {
+                editor.innerHTML = content;
+                currentDocumentName = name;
+                console.log(`Document "${name}" loaded from URL (ID: ${docId})`);
+            } else {
+                // Document was deleted
+                showDeletedDocModal();
+                clearURL();
+            }
+        } catch (e) {
+            console.error("Error loading document:", e);
+            showDeletedDocModal();
+            clearURL();
+        }
+    } else {
+        // Document not found
+        showDeletedDocModal();
+        clearURL();
+    }
 }
 
 // Function to detect if a font is available
@@ -3733,8 +3888,8 @@ editor.addEventListener("keydown", (event) => {
         return;
     }
 
-    // Handle slash to open command modal (but not if intro modal is open)
-    if (event.key === "/" && !commandModalOpen && introModal.classList.contains("hidden")) {
+    // Handle slash to open command modal (but not if intro modal or deleted doc modal is open)
+    if (event.key === "/" && !commandModalOpen && introModal.classList.contains("hidden") && deletedDocModal.classList.contains("hidden")) {
         event.preventDefault();
 
         // Check if multiple blocks are selected
@@ -4339,8 +4494,44 @@ document.addEventListener("selectionchange", () => {
     }
 });
 
+// Migrate existing documents to add IDs if they don't have them
+function migrateDocumentsWithIds() {
+    const docs = getSavedDocuments();
+    let migrated = false;
+
+    docs.forEach(doc => {
+        if (!doc.id) {
+            // Generate ID for existing document
+            doc.id = generateDocumentId();
+            migrated = true;
+
+            // Create the docById entry
+            const content = localStorage.getItem(`doc_${doc.name}`);
+            if (content) {
+                localStorage.setItem(`docById_${doc.id}`, JSON.stringify({ name: doc.name, content: content }));
+            }
+        }
+    });
+
+    if (migrated) {
+        setSavedDocuments(docs);
+        console.log("Migrated existing documents to include IDs");
+    }
+}
+
 // Load saved content, font, font size, line height, and custom fonts on page load
 loadContent();
+
+// Migrate existing documents
+migrateDocumentsWithIds();
+
+// Check for document ID in URL and load it
+const docIdFromURL = getDocIdFromURL();
+if (docIdFromURL) {
+    setTimeout(() => {
+        loadDocumentById(docIdFromURL);
+    }, 50);
+}
 
 // Show intro modal on first visit
 if (!localStorage.getItem("hasSeenIntro")) {
@@ -4514,6 +4705,12 @@ loadCancelButton.addEventListener("click", () => {
 });
 
 loadSearch.addEventListener("input", filterDocuments);
+
+// Deleted document modal event listener
+deletedDocOkButton.addEventListener("click", () => {
+    deletedDocModal.classList.add("hidden");
+    editor.focus();
+});
 
 loadSearch.addEventListener("keydown", (event) => {
     // Navigate documents with arrow keys
@@ -4722,12 +4919,31 @@ introModal.addEventListener("click", (event) => {
     }
 });
 
+// Close deleted document modal when clicking outside
+deletedDocModal.addEventListener("click", (event) => {
+    if (event.target === deletedDocModal) {
+        deletedDocModal.classList.add("hidden");
+        editor.focus();
+    }
+});
+
 // Allow closing intro modal with Escape or /
 document.addEventListener("keydown", (event) => {
     if (!introModal.classList.contains("hidden")) {
         if (event.key === "Escape" || event.key === "/") {
             event.preventDefault();
             introModal.classList.add("hidden");
+            editor.focus();
+        }
+    }
+});
+
+// Allow closing deleted document modal with Escape or /
+document.addEventListener("keydown", (event) => {
+    if (!deletedDocModal.classList.contains("hidden")) {
+        if (event.key === "Escape" || event.key === "/") {
+            event.preventDefault();
+            deletedDocModal.classList.add("hidden");
             editor.focus();
         }
     }
