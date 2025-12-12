@@ -1180,6 +1180,9 @@ async function clearAll() {
         // Clear URL parameter
         clearURL();
 
+        // Clear page title
+        clearPageTitle();
+
         // Create a new empty block
         const firstBlock = createBlockElement('text', '');
         editor.appendChild(firstBlock);
@@ -2557,6 +2560,16 @@ function getDocIdFromURL() {
     return params.get('id');
 }
 
+// Function to update page title with document name
+function updatePageTitle(docName) {
+    document.title = `thesis: ${docName}`;
+}
+
+// Function to clear page title
+function clearPageTitle() {
+    document.title = 'thesis';
+}
+
 // Function to perform the actual save
 function performSave() {
     const docName = saveNameInput.value.trim();
@@ -2585,6 +2598,9 @@ function performSave() {
 
     // Update URL with document ID
     updateURL(docId);
+
+    // Update page title
+    updatePageTitle(docName);
 
     saveModal.classList.add("hidden");
     editor.focus();
@@ -2622,6 +2638,9 @@ function quickSave() {
 
         // Update URL with document ID
         updateURL(docId);
+
+        // Update page title
+        updatePageTitle(currentDocumentName);
 
         console.log(`Document "${currentDocumentName}" saved with ID: ${docId}`);
     } else {
@@ -2694,6 +2713,9 @@ async function loadDocumentByName(docName) {
             updateURL(doc.id);
         }
 
+        // Update page title
+        updatePageTitle(docName);
+
         console.log(`Document "${docName}" loaded`);
         loadModal.classList.add("hidden");
         editor.focus();
@@ -2730,6 +2752,10 @@ async function loadDocumentById(docId) {
             if (doc) {
                 editor.innerHTML = content;
                 currentDocumentName = name;
+
+                // Update page title
+                updatePageTitle(name);
+
                 console.log(`Document "${name}" loaded from URL (ID: ${docId})`);
             } else {
                 // Document was deleted
