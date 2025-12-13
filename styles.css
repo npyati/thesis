@@ -8,6 +8,17 @@ body {
     align-items: center;
     height: 100vh;
     transition: background-color 0.3s ease, color 0.3s ease;
+    overflow: hidden;
+}
+
+/* Hide scrollbar for all browsers */
+body::-webkit-scrollbar {
+    display: none;
+}
+
+body {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
 }
 
 body.dark-mode {
@@ -73,6 +84,16 @@ body.dark-mode #editor blockquote {
     outline: none;
     overflow-y: auto;
     text-align: left;
+}
+
+/* Hide scrollbar for editor */
+#editor::-webkit-scrollbar {
+    display: none;
+}
+
+#editor {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
 }
 
 /* Block-based structure */
