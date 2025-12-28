@@ -2828,14 +2828,20 @@ function performSave() {
     updatePageTitle(docName);
 
     saveModal.classList.add("hidden");
-    editor.focus();
 
     // Restore cursor position
     if (savedSelection) {
-        const selection = window.getSelection();
-        selection.removeAllRanges();
-        selection.addRange(savedSelection);
-        savedSelection = null;
+        try {
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(savedSelection);
+            savedSelection = null;
+        } catch (e) {
+            console.error('Error restoring selection:', e);
+            editor.focus();
+        }
+    } else {
+        editor.focus();
     }
 }
 
@@ -2884,6 +2890,12 @@ async function quickSave() {
 
 // Function to load a saved document
 async function loadDocument() {
+    // Save current cursor position
+    const selection = window.getSelection();
+    if (selection.rangeCount > 0) {
+        savedSelection = selection.getRangeAt(0).cloneRange();
+    }
+
     const docs = getSavedDocuments();
 
     if (docs.length === 0) {
@@ -3094,14 +3106,20 @@ function openFontModal() {
 // Function to close font modal and restore selection
 function closeFontModal() {
     fontModal.classList.add("hidden");
-    editor.focus();
 
     // Restore saved selection
     if (savedSelection) {
-        const selection = window.getSelection();
-        selection.removeAllRanges();
-        selection.addRange(savedSelection);
-        savedSelection = null;
+        try {
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(savedSelection);
+            savedSelection = null;
+        } catch (e) {
+            console.error('Error restoring selection:', e);
+            editor.focus();
+        }
+    } else {
+        editor.focus();
     }
 }
 
@@ -3178,6 +3196,12 @@ function extractHeadings() {
 
 // Function to open heading modal
 async function openHeadingModal() {
+    // Save current cursor position
+    const selection = window.getSelection();
+    if (selection.rangeCount > 0) {
+        savedSelection = selection.getRangeAt(0).cloneRange();
+    }
+
     const headings = extractHeadings();
 
     if (headings.length === 0) {
@@ -3229,6 +3253,9 @@ function filterHeadings() {
 // Function to jump to heading
 function jumpToHeading(headingElement) {
     headingModal.classList.add("hidden");
+
+    // Clear saved selection since we're jumping to a new location
+    savedSelection = null;
 
     // Scroll the heading block into view
     headingElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -3352,6 +3379,12 @@ function centerCurrentBlock() {
 
 // Function to delete a saved document
 async function deleteDocument() {
+    // Save current cursor position
+    const selection = window.getSelection();
+    if (selection.rangeCount > 0) {
+        savedSelection = selection.getRangeAt(0).cloneRange();
+    }
+
     const docs = getSavedDocuments();
 
     if (docs.length === 0) {
@@ -3428,7 +3461,21 @@ async function deleteDocumentByName(docName) {
 
         // Close modal and refresh
         deleteModal.classList.add("hidden");
-        editor.focus();
+
+        // Restore cursor position
+        if (savedSelection) {
+            try {
+                const selection = window.getSelection();
+                selection.removeAllRanges();
+                selection.addRange(savedSelection);
+                savedSelection = null;
+            } catch (e) {
+                console.error('Error restoring selection:', e);
+                editor.focus();
+            }
+        } else {
+            editor.focus();
+        }
 
         console.log(`Document "${docName}" deleted`);
     }
@@ -3514,6 +3561,21 @@ function hideCommandModal() {
 
     // Clear multi-block selection when modal closes
     multiBlockSelection = [];
+
+    // Restore cursor position
+    if (savedSelection) {
+        try {
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(savedSelection);
+            savedSelection = null;
+        } catch (e) {
+            console.error('Error restoring selection:', e);
+            editor.focus();
+        }
+    } else {
+        editor.focus();
+    }
 }
 
 // Function to render commands in the list
@@ -3558,7 +3620,16 @@ function renderCommands(filteredCommands) {
 // Function to execute a command
 function executeCommand(command) {
     // Restore cursor to the saved position (no slash to remove since it was never inserted)
-    if (slashPosition && slashPosition.node) {
+    if (savedSelection) {
+        try {
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(savedSelection);
+            savedSelection = null;
+        } catch (e) {
+            console.error("Error restoring cursor position:", e);
+        }
+    } else if (slashPosition && slashPosition.node) {
         try {
             const selection = window.getSelection();
             const range = document.createRange();
@@ -3574,11 +3645,14 @@ function executeCommand(command) {
         } catch (e) {
             console.error("Error restoring cursor position:", e);
         }
-        slashPosition = null;
     }
 
+    slashPosition = null;
     commandModalOpen = false;
     commandModal.classList.add("hidden");
+
+    // Clear multi-block selection when modal closes
+    multiBlockSelection = [];
 
     // Execute the command
     command.action();
@@ -4262,6 +4336,8 @@ editor.addEventListener("keydown", (event) => {
 
         if (selection.rangeCount > 0) {
             range = selection.getRangeAt(0);
+            // Save the selection range to restore later
+            savedSelection = range.cloneRange();
         } else {
             // Create a range if none exists
             range = document.createRange();
@@ -4302,7 +4378,6 @@ editor.addEventListener("keydown", (event) => {
         }
 
         hideCommandModal();
-        editor.focus();
         return;
     }
 
@@ -4310,7 +4385,6 @@ editor.addEventListener("keydown", (event) => {
     if (event.key === "/" && commandModalOpen) {
         event.preventDefault();
         hideCommandModal();
-        editor.focus();
         return;
     }
 
@@ -4373,14 +4447,12 @@ commandSearch.addEventListener("keydown", (event) => {
         }
 
         hideCommandModal();
-        editor.focus();
     }
 
     // Close modal on / (slash) and remove the slash
     if (event.key === "/") {
         event.preventDefault();
         hideCommandModal();
-        editor.focus();
     }
 
     // Navigate commands with arrow keys
@@ -5062,14 +5134,20 @@ saveNameInput.addEventListener("input", filterSaveDocuments);
 
 saveCancelButton.addEventListener("click", () => {
     saveModal.classList.add("hidden");
-    editor.focus();
 
     // Restore cursor position
     if (savedSelection) {
-        const selection = window.getSelection();
-        selection.removeAllRanges();
-        selection.addRange(savedSelection);
-        savedSelection = null;
+        try {
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(savedSelection);
+            savedSelection = null;
+        } catch (e) {
+            console.error('Error restoring selection:', e);
+            editor.focus();
+        }
+    } else {
+        editor.focus();
     }
 });
 
@@ -5119,14 +5197,20 @@ saveNameInput.addEventListener("keydown", (event) => {
     } else if (event.key === "/") {
         event.preventDefault();
         saveModal.classList.add("hidden");
-        editor.focus();
 
         // Restore cursor position
         if (savedSelection) {
-            const selection = window.getSelection();
-            selection.removeAllRanges();
-            selection.addRange(savedSelection);
-            savedSelection = null;
+            try {
+                const selection = window.getSelection();
+                selection.removeAllRanges();
+                selection.addRange(savedSelection);
+                savedSelection = null;
+            } catch (e) {
+                console.error('Error restoring selection:', e);
+                editor.focus();
+            }
+        } else {
+            editor.focus();
         }
     }
 });
@@ -5134,7 +5218,21 @@ saveNameInput.addEventListener("keydown", (event) => {
 // Load modal event listeners
 loadCancelButton.addEventListener("click", () => {
     loadModal.classList.add("hidden");
-    editor.focus();
+
+    // Restore cursor position
+    if (savedSelection) {
+        try {
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(savedSelection);
+            savedSelection = null;
+        } catch (e) {
+            console.error('Error restoring selection:', e);
+            editor.focus();
+        }
+    } else {
+        editor.focus();
+    }
 });
 
 loadSearch.addEventListener("input", filterDocuments);
@@ -5173,7 +5271,21 @@ loadSearch.addEventListener("keydown", (event) => {
     } else if (event.key === "/") {
         event.preventDefault();
         loadModal.classList.add("hidden");
-        editor.focus();
+
+        // Restore cursor position
+        if (savedSelection) {
+            try {
+                const selection = window.getSelection();
+                selection.removeAllRanges();
+                selection.addRange(savedSelection);
+                savedSelection = null;
+            } catch (e) {
+                console.error('Error restoring selection:', e);
+                editor.focus();
+            }
+        } else {
+            editor.focus();
+        }
     } else if (event.key === "Enter") {
         event.preventDefault();
         // Get filtered documents
@@ -5195,7 +5307,21 @@ loadSearch.addEventListener("keydown", (event) => {
 // Delete modal event listeners
 deleteCancelButton.addEventListener("click", () => {
     deleteModal.classList.add("hidden");
-    editor.focus();
+
+    // Restore cursor position
+    if (savedSelection) {
+        try {
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(savedSelection);
+            savedSelection = null;
+        } catch (e) {
+            console.error('Error restoring selection:', e);
+            editor.focus();
+        }
+    } else {
+        editor.focus();
+    }
 });
 
 deleteSearch.addEventListener("input", filterDeleteDocuments);
@@ -5228,7 +5354,21 @@ deleteSearch.addEventListener("keydown", (event) => {
     } else if (event.key === "/") {
         event.preventDefault();
         deleteModal.classList.add("hidden");
-        editor.focus();
+
+        // Restore cursor position
+        if (savedSelection) {
+            try {
+                const selection = window.getSelection();
+                selection.removeAllRanges();
+                selection.addRange(savedSelection);
+                savedSelection = null;
+            } catch (e) {
+                console.error('Error restoring selection:', e);
+                editor.focus();
+            }
+        } else {
+            editor.focus();
+        }
     } else if (event.key === "Enter") {
         event.preventDefault();
         // Get filtered documents
@@ -5251,14 +5391,20 @@ deleteSearch.addEventListener("keydown", (event) => {
 saveModal.addEventListener("click", (event) => {
     if (event.target === saveModal) {
         saveModal.classList.add("hidden");
-        editor.focus();
 
         // Restore cursor position
         if (savedSelection) {
-            const selection = window.getSelection();
-            selection.removeAllRanges();
-            selection.addRange(savedSelection);
-            savedSelection = null;
+            try {
+                const selection = window.getSelection();
+                selection.removeAllRanges();
+                selection.addRange(savedSelection);
+                savedSelection = null;
+            } catch (e) {
+                console.error('Error restoring selection:', e);
+                editor.focus();
+            }
+        } else {
+            editor.focus();
         }
     }
 });
@@ -5266,14 +5412,42 @@ saveModal.addEventListener("click", (event) => {
 loadModal.addEventListener("click", (event) => {
     if (event.target === loadModal) {
         loadModal.classList.add("hidden");
-        editor.focus();
+
+        // Restore cursor position
+        if (savedSelection) {
+            try {
+                const selection = window.getSelection();
+                selection.removeAllRanges();
+                selection.addRange(savedSelection);
+                savedSelection = null;
+            } catch (e) {
+                console.error('Error restoring selection:', e);
+                editor.focus();
+            }
+        } else {
+            editor.focus();
+        }
     }
 });
 
 deleteModal.addEventListener("click", (event) => {
     if (event.target === deleteModal) {
         deleteModal.classList.add("hidden");
-        editor.focus();
+
+        // Restore cursor position
+        if (savedSelection) {
+            try {
+                const selection = window.getSelection();
+                selection.removeAllRanges();
+                selection.addRange(savedSelection);
+                savedSelection = null;
+            } catch (e) {
+                console.error('Error restoring selection:', e);
+                editor.focus();
+            }
+        } else {
+            editor.focus();
+        }
     }
 });
 
@@ -5347,7 +5521,21 @@ fontModal.addEventListener("click", (event) => {
 // Heading modal event listeners
 headingCancelButton.addEventListener("click", () => {
     headingModal.classList.add("hidden");
-    editor.focus();
+
+    // Restore cursor position
+    if (savedSelection) {
+        try {
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(savedSelection);
+            savedSelection = null;
+        } catch (e) {
+            console.error('Error restoring selection:', e);
+            editor.focus();
+        }
+    } else {
+        editor.focus();
+    }
 });
 
 headingSearch.addEventListener("input", filterHeadings);
@@ -5380,7 +5568,21 @@ headingSearch.addEventListener("keydown", (event) => {
     } else if (event.key === "/") {
         event.preventDefault();
         headingModal.classList.add("hidden");
-        editor.focus();
+
+        // Restore cursor position
+        if (savedSelection) {
+            try {
+                const selection = window.getSelection();
+                selection.removeAllRanges();
+                selection.addRange(savedSelection);
+                savedSelection = null;
+            } catch (e) {
+                console.error('Error restoring selection:', e);
+                editor.focus();
+            }
+        } else {
+            editor.focus();
+        }
     } else if (event.key === "Enter") {
         event.preventDefault();
         // Get filtered headings
@@ -5401,7 +5603,21 @@ headingSearch.addEventListener("keydown", (event) => {
 headingModal.addEventListener("click", (event) => {
     if (event.target === headingModal) {
         headingModal.classList.add("hidden");
-        editor.focus();
+
+        // Restore cursor position
+        if (savedSelection) {
+            try {
+                const selection = window.getSelection();
+                selection.removeAllRanges();
+                selection.addRange(savedSelection);
+                savedSelection = null;
+            } catch (e) {
+                console.error('Error restoring selection:', e);
+                editor.focus();
+            }
+        } else {
+            editor.focus();
+        }
     }
 });
 
