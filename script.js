@@ -174,6 +174,10 @@ const loadModal = document.getElementById("load-modal");
 const loadSearch = document.getElementById("load-search");
 const loadList = document.getElementById("load-list");
 const loadCancelButton = document.getElementById("load-cancel-button");
+const deleteModal = document.getElementById("delete-modal");
+const deleteSearch = document.getElementById("delete-search");
+const deleteList = document.getElementById("delete-list");
+const deleteCancelButton = document.getElementById("delete-cancel-button");
 const fontModal = document.getElementById("font-modal");
 const fontSearch = document.getElementById("font-search");
 const fontList = document.getElementById("font-list");
@@ -200,6 +204,7 @@ let saveTimeout = null;
 let savedSelection = null;
 let selectedSaveIndex = 0;
 let selectedLoadIndex = 0;
+let selectedDeleteIndex = 0;
 let selectedFontIndex = 0;
 let selectedHeadingIndex = 0;
 let customFonts = [];
@@ -210,6 +215,74 @@ let focusMode = false;
 let multiBlockSelection = []; // Store blocks when multi-block operation is triggered
 let currentDocumentName = null; // Track the currently loaded/saved document
 let filteredCommandsList = []; // Store the currently filtered commands for keyboard navigation
+let currentFileHandle = null; // Track the current file handle for direct file editing
+let currentFileName = null; // Track the current file name
+const DB_NAME = 'thesis-db';
+const DB_VERSION = 1;
+const STORE_NAME = 'file-handles';
+
+// Initialize IndexedDB for storing file handles
+function initDB() {
+    return new Promise((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME, DB_VERSION);
+
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => resolve(request.result);
+
+        request.onupgradeneeded = (event) => {
+            const db = event.target.result;
+            if (!db.objectStoreNames.contains(STORE_NAME)) {
+                db.createObjectStore(STORE_NAME);
+            }
+        };
+    });
+}
+
+// Save file handle to IndexedDB
+async function saveFileHandleToDB(handle, fileName) {
+    try {
+        const db = await initDB();
+        const transaction = db.transaction(STORE_NAME, 'readwrite');
+        const store = transaction.objectStore(STORE_NAME);
+
+        await store.put({ handle, fileName }, 'currentFile');
+        console.log('File handle saved to IndexedDB');
+    } catch (error) {
+        console.error('Error saving file handle:', error);
+    }
+}
+
+// Load file handle from IndexedDB
+async function loadFileHandleFromDB() {
+    try {
+        const db = await initDB();
+        const transaction = db.transaction(STORE_NAME, 'readonly');
+        const store = transaction.objectStore(STORE_NAME);
+
+        return new Promise((resolve, reject) => {
+            const request = store.get('currentFile');
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+        });
+    } catch (error) {
+        console.error('Error loading file handle:', error);
+        return null;
+    }
+}
+
+// Clear file handle from IndexedDB
+async function clearFileHandleFromDB() {
+    try {
+        const db = await initDB();
+        const transaction = db.transaction(STORE_NAME, 'readwrite');
+        const store = transaction.objectStore(STORE_NAME);
+
+        await store.delete('currentFile');
+        console.log('File handle cleared from IndexedDB');
+    } catch (error) {
+        console.error('Error clearing file handle:', error);
+    }
+}
 
 // Available fonts
 const availableFonts = [
@@ -275,13 +348,18 @@ const introHTML = `<p><strong>thesis</strong> is a minimalist text editor.</p>
 // Available commands
 const commands = [
     {
-        name: "Save Document As...",
-        description: "Save current document with a name",
+        name: "Save",
+        description: "Save to current location (file or browser)",
+        action: quickSave
+    },
+    {
+        name: "Save to Browser As...",
+        description: "Save to browser storage with a name",
         action: saveDocumentAs
     },
     {
-        name: "Load Document",
-        description: "Load a previously saved document",
+        name: "Load from Browser",
+        description: "Load a document from browser storage",
         action: loadDocument
     },
     {
@@ -524,11 +602,6 @@ const commands = [
         action: copyAll
     },
     {
-        name: "Export as Markdown",
-        description: "Download content as Markdown file",
-        action: exportAsMarkdown
-    },
-    {
         name: "Export as Word",
         description: "Download content as Word (.docx) file",
         action: exportAsWord
@@ -544,9 +617,14 @@ const commands = [
         action: copyAsMarkdown
     },
     {
-        name: "Import from Markdown",
-        description: "Load content from Markdown file",
+        name: "Open File",
+        description: "Open and auto-sync with a .md file on disk",
         action: importFromMarkdown
+    },
+    {
+        name: "Save to File As...",
+        description: "Save and auto-sync to a .md file on disk",
+        action: saveToNewFile
     },
     {
         name: "Delete Block",
@@ -1100,11 +1178,104 @@ function loadContent() {
     }
 }
 
+// Function to convert current blocks to markdown
+function blocksToMarkdown() {
+    return htmlToMarkdown(editor.innerHTML);
+}
+
+// Function to save to file
+async function saveToFile() {
+    if (!currentFileHandle) return;
+
+    try {
+        // Convert editor content to markdown
+        const markdown = blocksToMarkdown();
+
+        // Create a writable stream
+        const writable = await currentFileHandle.createWritable();
+
+        // Write the markdown content
+        await writable.write(markdown);
+
+        // Close the file
+        await writable.close();
+
+        console.log(`File "${currentFileName}" saved`);
+    } catch (error) {
+        console.error('Error saving to file:', error);
+        // If we lose permission, clear the file handle
+        if (error.name === 'NotAllowedError') {
+            currentFileHandle = null;
+            currentFileName = null;
+            clearPageTitle();
+        }
+    }
+}
+
+// Function to save to a new file (Save As)
+async function saveToNewFile() {
+    try {
+        // Check if File System Access API is supported
+        if ('showSaveFilePicker' in window) {
+            const fileHandle = await window.showSaveFilePicker({
+                types: [{
+                    description: 'Markdown Files',
+                    accept: { 'text/markdown': ['.md'] }
+                }],
+                suggestedName: currentFileName || 'document.md'
+            });
+
+            // Convert editor content to markdown
+            const markdown = blocksToMarkdown();
+
+            // Create a writable stream
+            const writable = await fileHandle.createWritable();
+
+            // Write the markdown content
+            await writable.write(markdown);
+
+            // Close the file
+            await writable.close();
+
+            // Get the file to get its name
+            const file = await fileHandle.getFile();
+
+            // Store file handle and name for future auto-saves
+            currentFileHandle = fileHandle;
+            currentFileName = file.name;
+
+            // Save file handle to IndexedDB for persistence
+            await saveFileHandleToDB(fileHandle, file.name);
+
+            // Clear the document name since we're now working on a file
+            currentDocumentName = null;
+            clearURL();
+
+            // Update page title with filename
+            updatePageTitle(file.name);
+
+            console.log(`File "${file.name}" saved`);
+        } else {
+            // Fallback to regular export for unsupported browsers
+            exportAsMarkdown();
+        }
+    } catch (error) {
+        // User cancelled or error occurred
+        if (error.name !== 'AbortError') {
+            console.error('Error saving file:', error);
+        }
+    }
+}
+
 // Function to auto-save with debouncing
 function autoSave() {
     clearTimeout(saveTimeout);
-    saveTimeout = setTimeout(() => {
+    saveTimeout = setTimeout(async () => {
         saveContent();
+        // Also save to file if we have a file handle
+        if (currentFileHandle) {
+            await saveToFile();
+        }
     }, 1000); // Save 1 second after user stops typing
 }
 
@@ -1177,6 +1348,13 @@ async function clearAll() {
     if (confirmed) {
         editor.innerHTML = "";
         currentDocumentName = null; // Clear current document pointer
+
+        // Clear file handle for file editing
+        currentFileHandle = null;
+        currentFileName = null;
+
+        // Clear file handle from IndexedDB
+        await clearFileHandleFromDB();
 
         // Clear URL parameter
         clearURL();
@@ -1485,7 +1663,7 @@ function htmlToMarkdown(htmlContent) {
         const contentEl = block.querySelector('.block-content');
         const content = contentEl ? contentEl.textContent.trim() : '';
 
-        // Empty text blocks should reset numbered counters and add spacing
+        // Empty text blocks should reset numbered counters and add blank line
         if (!content && type === 'text') {
             numberedCounters = {};
             markdown += '\n';
@@ -1499,17 +1677,17 @@ function htmlToMarkdown(htmlContent) {
             case 'heading1':
                 // Reset numbered counters when hitting non-numbered block
                 numberedCounters = {};
-                markdown += '# ' + content + '\n\n';
+                markdown += '# ' + content + '\n';
                 break;
             case 'heading2':
                 // Reset numbered counters when hitting non-numbered block
                 numberedCounters = {};
-                markdown += '## ' + content + '\n\n';
+                markdown += '## ' + content + '\n';
                 break;
             case 'heading3':
                 // Reset numbered counters when hitting non-numbered block
                 numberedCounters = {};
-                markdown += '### ' + content + '\n\n';
+                markdown += '### ' + content + '\n';
                 break;
             case 'bullet':
                 // Reset numbered counters when hitting non-numbered block
@@ -1534,21 +1712,19 @@ function htmlToMarkdown(htmlContent) {
             case 'quote':
                 // Reset numbered counters when hitting non-numbered block
                 numberedCounters = {};
-                markdown += '> ' + content + '\n\n';
+                markdown += '> ' + content + '\n';
                 break;
             case 'text':
             default:
                 // Reset numbered counters when hitting non-numbered block
                 numberedCounters = {};
-                if (content) {
-                    markdown += content + '\n\n';
-                }
+                markdown += content + '\n';
                 break;
         }
     });
 
-    // Clean up excessive line breaks (more than 2 consecutive newlines)
-    return markdown.replace(/\n{3,}/g, '\n\n').trim();
+    // Trim trailing whitespace only
+    return markdown.trimEnd();
 }
 
 // Function to export as Markdown
@@ -1638,7 +1814,7 @@ async function copyAsMarkdown() {
         const contentEl = block.querySelector('.block-content');
         const content = contentEl ? contentEl.textContent.trim() : '';
 
-        // Empty text blocks should reset numbered counters and add spacing
+        // Empty text blocks should reset numbered counters and add blank line
         if (!content && type === 'text') {
             numberedCounters = {};
             markdown += '\n';
@@ -1652,17 +1828,17 @@ async function copyAsMarkdown() {
             case 'heading1':
                 // Reset numbered counters when hitting non-numbered block
                 numberedCounters = {};
-                markdown += '# ' + content + '\n\n';
+                markdown += '# ' + content + '\n';
                 break;
             case 'heading2':
                 // Reset numbered counters when hitting non-numbered block
                 numberedCounters = {};
-                markdown += '## ' + content + '\n\n';
+                markdown += '## ' + content + '\n';
                 break;
             case 'heading3':
                 // Reset numbered counters when hitting non-numbered block
                 numberedCounters = {};
-                markdown += '### ' + content + '\n\n';
+                markdown += '### ' + content + '\n';
                 break;
             case 'bullet':
                 // Reset numbered counters when hitting non-numbered block
@@ -1687,15 +1863,13 @@ async function copyAsMarkdown() {
             case 'quote':
                 // Reset numbered counters when hitting non-numbered block
                 numberedCounters = {};
-                markdown += '> ' + content + '\n\n';
+                markdown += '> ' + content + '\n';
                 break;
             case 'text':
             default:
                 // Reset numbered counters when hitting non-numbered block
                 numberedCounters = {};
-                if (content) {
-                    markdown += content + '\n\n';
-                }
+                markdown += content + '\n';
                 break;
         }
     });
@@ -2369,9 +2543,59 @@ function processInlineFormatting(text) {
     return text;
 }
 
-// Function to import from Markdown
-function importFromMarkdown() {
-    markdownFileInput.click();
+// Function to import from Markdown using File System Access API
+async function importFromMarkdown() {
+    try {
+        // Check if File System Access API is supported
+        if ('showOpenFilePicker' in window) {
+            const [fileHandle] = await window.showOpenFilePicker({
+                types: [{
+                    description: 'Markdown Files',
+                    accept: { 'text/markdown': ['.md', '.markdown'] }
+                }],
+                multiple: false
+            });
+
+            // Get the file
+            const file = await fileHandle.getFile();
+            const markdownContent = await file.text();
+
+            // Convert markdown to blocks
+            const blocks = markdownToBlocks(markdownContent);
+
+            // Clear editor and insert blocks
+            editor.innerHTML = '';
+            blocks.forEach(block => editor.appendChild(block));
+
+            // Update numbering
+            updateNumberedBlocks();
+
+            // Store file handle and name for auto-save
+            currentFileHandle = fileHandle;
+            currentFileName = file.name;
+
+            // Save file handle to IndexedDB for persistence
+            await saveFileHandleToDB(fileHandle, file.name);
+
+            // Clear the document name since we're now working on a file
+            currentDocumentName = null;
+            clearURL();
+
+            // Update page title with filename
+            updatePageTitle(file.name);
+
+            console.log(`Markdown file "${file.name}" opened for direct editing`);
+
+        } else {
+            // Fallback to traditional file input
+            markdownFileInput.click();
+        }
+    } catch (error) {
+        // User cancelled or error occurred
+        if (error.name !== 'AbortError') {
+            console.error('Error opening file:', error);
+        }
+    }
 }
 
 // Function to convert Markdown to blocks
@@ -2615,40 +2839,47 @@ function performSave() {
     }
 }
 
-// Function to quickly save to the current document
-function quickSave() {
-    if (!currentDocumentName) {
-        // No current document - open save dialog
-        saveDocumentAs();
+// Function to quickly save to the current document or file
+async function quickSave() {
+    // Priority 1: If working on a file, save to file
+    if (currentFileHandle) {
+        await saveToFile();
         return;
     }
 
-    const content = editor.innerHTML;
-    const docs = getSavedDocuments();
+    // Priority 2: If working on a browser document, save to browser
+    if (currentDocumentName) {
+        const content = editor.innerHTML;
+        const docs = getSavedDocuments();
 
-    // Update timestamp for existing document
-    const existingIndex = docs.findIndex(d => d.name === currentDocumentName);
-    if (existingIndex >= 0) {
-        docs[existingIndex].timestamp = Date.now();
-        const docId = docs[existingIndex].id;
+        // Update timestamp for existing document
+        const existingIndex = docs.findIndex(d => d.name === currentDocumentName);
+        if (existingIndex >= 0) {
+            docs[existingIndex].timestamp = Date.now();
+            const docId = docs[existingIndex].id;
 
-        // Store by both ID and name
-        localStorage.setItem(`doc_${currentDocumentName}`, content);
-        localStorage.setItem(`docById_${docId}`, JSON.stringify({ name: currentDocumentName, content: content }));
-        setSavedDocuments(docs);
+            // Store by both ID and name
+            localStorage.setItem(`doc_${currentDocumentName}`, content);
+            localStorage.setItem(`docById_${docId}`, JSON.stringify({ name: currentDocumentName, content: content }));
+            setSavedDocuments(docs);
 
-        // Update URL with document ID
-        updateURL(docId);
+            // Update URL with document ID
+            updateURL(docId);
 
-        // Update page title
-        updatePageTitle(currentDocumentName);
+            // Update page title
+            updatePageTitle(currentDocumentName);
 
-        console.log(`Document "${currentDocumentName}" saved with ID: ${docId}`);
-    } else {
-        localStorage.setItem(`doc_${currentDocumentName}`, content);
-        setSavedDocuments(docs);
-        console.log(`Document "${currentDocumentName}" saved`);
+            console.log(`Browser document "${currentDocumentName}" saved with ID: ${docId}`);
+        } else {
+            localStorage.setItem(`doc_${currentDocumentName}`, content);
+            setSavedDocuments(docs);
+            console.log(`Browser document "${currentDocumentName}" saved`);
+        }
+        return;
     }
+
+    // Priority 3: Nothing active - ask user what to do
+    saveDocumentAs();
 }
 
 // Function to load a saved document
@@ -3128,29 +3359,90 @@ async function deleteDocument() {
         return;
     }
 
-    const docList = docs.map((d, i) => {
-        const date = new Date(d.timestamp).toLocaleString();
-        return `${i + 1}. ${d.name} (${date})`;
-    }).join("\n");
+    deleteSearch.value = "";
+    selectedDeleteIndex = 0;
+    renderDeleteDocuments(docs);
+    deleteModal.classList.remove("hidden");
+    setTimeout(() => deleteSearch.focus(), 0);
+}
 
-    const choice = prompt(`Enter document number or name to delete:\n\n${docList}`);
-    if (!choice) return;
+// Function to render documents in delete modal
+function renderDeleteDocuments(docs) {
+    deleteList.innerHTML = "";
 
-    let docName;
-    const num = parseInt(choice);
-    if (!isNaN(num) && num > 0 && num <= docs.length) {
-        docName = docs[num - 1].name;
-    } else {
-        docName = choice;
+    if (docs.length === 0) {
+        deleteList.innerHTML = '<div class="no-documents">No documents found</div>';
+        selectedDeleteIndex = 0;
+        return;
     }
 
+    docs.forEach((doc, index) => {
+        const docItem = document.createElement("div");
+        docItem.className = `document-item ${index === selectedDeleteIndex ? "selected" : ""}`;
+
+        const docName = document.createElement("div");
+        docName.className = "document-item-name";
+        docName.textContent = doc.name;
+
+        const docDate = document.createElement("div");
+        docDate.className = "document-item-date";
+        docDate.textContent = new Date(doc.timestamp).toLocaleString();
+
+        docItem.appendChild(docName);
+        docItem.appendChild(docDate);
+
+        docItem.addEventListener("click", async () => {
+            await deleteDocumentByName(doc.name);
+        });
+
+        deleteList.appendChild(docItem);
+    });
+}
+
+// Function to delete document by name
+async function deleteDocumentByName(docName) {
     const confirmed = await showConfirm(`Delete document "${docName}"? This cannot be undone.`);
     if (confirmed) {
+        // Get the document to find its ID
+        const docs = getSavedDocuments();
+        const doc = docs.find(d => d.name === docName);
+
+        // Remove from localStorage
         localStorage.removeItem(`doc_${docName}`);
+
+        // Also remove by ID if it exists
+        if (doc && doc.id) {
+            localStorage.removeItem(`docById_${doc.id}`);
+        }
+
+        // Update saved documents list
         const newDocs = docs.filter(d => d.name !== docName);
         setSavedDocuments(newDocs);
+
+        // If this was the current document, clear it
+        if (currentDocumentName === docName) {
+            currentDocumentName = null;
+            clearURL();
+            clearPageTitle();
+        }
+
+        // Close modal and refresh
+        deleteModal.classList.add("hidden");
+        editor.focus();
+
         console.log(`Document "${docName}" deleted`);
     }
+}
+
+// Function to filter delete documents based on search
+function filterDeleteDocuments() {
+    const searchTerm = deleteSearch.value.toLowerCase();
+    const docs = getSavedDocuments();
+    const filtered = docs.filter(doc =>
+        doc.name.toLowerCase().includes(searchTerm)
+    );
+    selectedDeleteIndex = 0;
+    renderDeleteDocuments(filtered);
 }
 
 // Function to show command modal
@@ -3348,6 +3640,40 @@ function filterCommands(searchTerm) {
 // Detect slash command and keyboard shortcuts
 editor.addEventListener("keydown", (event) => {
     console.log('KEYDOWN EVENT:', event.key);
+
+    // Prevent most keys in typewriter mode (must be first to override all other handlers)
+    if (typewriterMode) {
+        // Prevent backspace and delete
+        if (event.key === 'Backspace' || event.key === 'Delete') {
+            event.preventDefault();
+            return;
+        }
+
+        // Prevent arrow keys (cursor movement)
+        if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' ||
+            event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+            event.preventDefault();
+            return;
+        }
+
+        // Prevent Home/End keys
+        if (event.key === 'Home' || event.key === 'End') {
+            event.preventDefault();
+            return;
+        }
+
+        // Prevent Page Up/Down
+        if (event.key === 'PageUp' || event.key === 'PageDown') {
+            event.preventDefault();
+            return;
+        }
+
+        // Prevent Tab (indenting)
+        if (event.key === 'Tab') {
+            event.preventDefault();
+            return;
+        }
+    }
 
     // Handle Enter key - DOM-based
     if (event.key === 'Enter') {
@@ -3685,40 +4011,6 @@ editor.addEventListener("keydown", (event) => {
         if (nextBlock) {
             event.preventDefault();
             focusBlock(nextBlock, false); // Focus at beginning of next block
-            return;
-        }
-    }
-
-    // Prevent backspace, delete, and cursor movement in typewriter mode
-    if (typewriterMode) {
-        // Prevent backspace and delete
-        if (event.key === 'Backspace' || event.key === 'Delete') {
-            event.preventDefault();
-            return;
-        }
-
-        // Prevent arrow keys (cursor movement)
-        if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' ||
-            event.key === 'ArrowUp' || event.key === 'ArrowDown') {
-            event.preventDefault();
-            return;
-        }
-
-        // Prevent Home/End keys
-        if (event.key === 'Home' || event.key === 'End') {
-            event.preventDefault();
-            return;
-        }
-
-        // Prevent Page Up/Down
-        if (event.key === 'PageUp' || event.key === 'PageDown') {
-            event.preventDefault();
-            return;
-        }
-
-        // Prevent Enter (creating new lines/blocks)
-        if (event.key === 'Enter') {
-            event.preventDefault();
             return;
         }
     }
@@ -4600,6 +4892,78 @@ if (docIdFromURL) {
     setTimeout(() => {
         loadDocumentById(docIdFromURL);
     }, 50);
+} else {
+    // If no document from URL, try to restore file handle from previous session
+    setTimeout(async () => {
+        const savedFile = await loadFileHandleFromDB();
+        if (savedFile && savedFile.handle) {
+            try {
+                // Verify we still have permission to the file
+                const permission = await savedFile.handle.queryPermission({ mode: 'readwrite' });
+
+                if (permission === 'granted') {
+                    // We have permission, restore the file
+                    const file = await savedFile.handle.getFile();
+                    const markdownContent = await file.text();
+
+                    // Convert markdown to blocks
+                    const blocks = markdownToBlocks(markdownContent);
+
+                    // Clear editor and insert blocks
+                    editor.innerHTML = '';
+                    blocks.forEach(block => editor.appendChild(block));
+
+                    // Update numbering
+                    updateNumberedBlocks();
+
+                    // Restore file handle and name
+                    currentFileHandle = savedFile.handle;
+                    currentFileName = savedFile.fileName;
+
+                    // Update page title
+                    updatePageTitle(savedFile.fileName);
+
+                    console.log(`Restored file "${savedFile.fileName}" from previous session`);
+                } else {
+                    // Request permission
+                    const newPermission = await savedFile.handle.requestPermission({ mode: 'readwrite' });
+
+                    if (newPermission === 'granted') {
+                        // Permission granted, restore the file
+                        const file = await savedFile.handle.getFile();
+                        const markdownContent = await file.text();
+
+                        // Convert markdown to blocks
+                        const blocks = markdownToBlocks(markdownContent);
+
+                        // Clear editor and insert blocks
+                        editor.innerHTML = '';
+                        blocks.forEach(block => editor.appendChild(block));
+
+                        // Update numbering
+                        updateNumberedBlocks();
+
+                        // Restore file handle and name
+                        currentFileHandle = savedFile.handle;
+                        currentFileName = savedFile.fileName;
+
+                        // Update page title
+                        updatePageTitle(savedFile.fileName);
+
+                        console.log(`Restored file "${savedFile.fileName}" after re-requesting permission`);
+                    } else {
+                        // Permission denied, clear the saved handle
+                        await clearFileHandleFromDB();
+                        console.log('Permission denied to restore previous file');
+                    }
+                }
+            } catch (error) {
+                console.error('Error restoring file:', error);
+                // Clear the invalid handle
+                await clearFileHandleFromDB();
+            }
+        }
+    }, 50);
 }
 
 // Show intro modal on first visit
@@ -4828,6 +5192,61 @@ loadSearch.addEventListener("keydown", (event) => {
     }
 });
 
+// Delete modal event listeners
+deleteCancelButton.addEventListener("click", () => {
+    deleteModal.classList.add("hidden");
+    editor.focus();
+});
+
+deleteSearch.addEventListener("input", filterDeleteDocuments);
+
+deleteSearch.addEventListener("keydown", (event) => {
+    // Navigate documents with arrow keys
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const docItems = deleteList.querySelectorAll(".document-item");
+
+        if (docItems.length > 0) {
+            if (event.key === "ArrowDown") {
+                selectedDeleteIndex = (selectedDeleteIndex + 1) % docItems.length;
+            } else {
+                selectedDeleteIndex = (selectedDeleteIndex - 1 + docItems.length) % docItems.length;
+            }
+
+            // Re-render with new selection
+            const searchTerm = deleteSearch.value.toLowerCase();
+            const docs = getSavedDocuments();
+            const filtered = docs.filter(doc =>
+                doc.name.toLowerCase().includes(searchTerm)
+            );
+            renderDeleteDocuments(filtered);
+
+            // Scroll selected item into view
+            const selectedItem = deleteList.querySelectorAll(".document-item")[selectedDeleteIndex];
+            selectedItem?.scrollIntoView({ block: "nearest" });
+        }
+    } else if (event.key === "/") {
+        event.preventDefault();
+        deleteModal.classList.add("hidden");
+        editor.focus();
+    } else if (event.key === "Enter") {
+        event.preventDefault();
+        // Get filtered documents
+        const searchTerm = deleteSearch.value.toLowerCase();
+        const docs = getSavedDocuments();
+        const filtered = docs.filter(doc =>
+            doc.name.toLowerCase().includes(searchTerm)
+        );
+
+        // Delete the selected document, or the only one if there's just one
+        if (filtered.length === 1) {
+            deleteDocumentByName(filtered[0].name);
+        } else if (filtered.length > 0 && filtered[selectedDeleteIndex]) {
+            deleteDocumentByName(filtered[selectedDeleteIndex].name);
+        }
+    }
+});
+
 // Close modals when clicking outside
 saveModal.addEventListener("click", (event) => {
     if (event.target === saveModal) {
@@ -4847,6 +5266,13 @@ saveModal.addEventListener("click", (event) => {
 loadModal.addEventListener("click", (event) => {
     if (event.target === loadModal) {
         loadModal.classList.add("hidden");
+        editor.focus();
+    }
+});
+
+deleteModal.addEventListener("click", (event) => {
+    if (event.target === deleteModal) {
+        deleteModal.classList.add("hidden");
         editor.focus();
     }
 });
