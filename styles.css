@@ -437,6 +437,7 @@ body.focus-mode #editor .block.focus-active {
 
 #save-name-input,
 #load-search,
+#delete-search,
 #font-search,
 #heading-search {
     width: 100%;
@@ -452,6 +453,7 @@ body.focus-mode #editor .block.focus-active {
 
 #save-name-input:focus,
 #load-search:focus,
+#delete-search:focus,
 #font-search:focus,
 #heading-search:focus {
     border-color: #4a90e2;
@@ -543,6 +545,7 @@ body.dark-mode .modal-content h3 {
 
 body.dark-mode #save-name-input,
 body.dark-mode #load-search,
+body.dark-mode #delete-search,
 body.dark-mode #font-search,
 body.dark-mode #heading-search {
     background: #3d3d3d;
