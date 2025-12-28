@@ -3689,10 +3689,38 @@ editor.addEventListener("keydown", (event) => {
         }
     }
 
-    // Prevent backspace and delete in typewriter mode
-    if (typewriterMode && (event.key === 'Backspace' || event.key === 'Delete')) {
-        event.preventDefault();
-        return;
+    // Prevent backspace, delete, and cursor movement in typewriter mode
+    if (typewriterMode) {
+        // Prevent backspace and delete
+        if (event.key === 'Backspace' || event.key === 'Delete') {
+            event.preventDefault();
+            return;
+        }
+
+        // Prevent arrow keys (cursor movement)
+        if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' ||
+            event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+            event.preventDefault();
+            return;
+        }
+
+        // Prevent Home/End keys
+        if (event.key === 'Home' || event.key === 'End') {
+            event.preventDefault();
+            return;
+        }
+
+        // Prevent Page Up/Down
+        if (event.key === 'PageUp' || event.key === 'PageDown') {
+            event.preventDefault();
+            return;
+        }
+
+        // Prevent Enter (creating new lines/blocks)
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            return;
+        }
     }
 
     // Move multiple selected blocks up with Option+Up (Mac) or Alt+Up (PC)
@@ -4498,6 +4526,12 @@ editor.addEventListener("paste", (event) => {
 
 // Handle clicks on editor - create first block if empty
 editor.addEventListener("click", (event) => {
+    // Prevent cursor movement in typewriter mode
+    if (typewriterMode) {
+        event.preventDefault();
+        return;
+    }
+
     const blocks = editor.querySelectorAll('.block');
     if (blocks.length === 0) {
         // No blocks - create first block and focus it
@@ -4507,6 +4541,14 @@ editor.addEventListener("click", (event) => {
     }
     updateFocusParagraph();
     centerCurrentBlock();
+});
+
+// Prevent mousedown in typewriter mode to block cursor positioning
+editor.addEventListener("mousedown", (event) => {
+    if (typewriterMode) {
+        event.preventDefault();
+        return;
+    }
 });
 
 editor.addEventListener("keyup", () => {
