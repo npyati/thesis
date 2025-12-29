@@ -640,6 +640,41 @@ const commands = [
         name: "Clear Storage",
         description: "Clear auto-save from browser memory",
         action: clearStorage
+    },
+    {
+        name: "Load AI Model",
+        description: "Download and initialize AI writing assistant (~2.3GB, one-time)",
+        action: async () => {
+            if (window.aiSuggestions && window.aiSuggestions.isReady()) {
+                showStatus("AI model already loaded");
+                return;
+            }
+
+            showStatus("Loading AI model...");
+            const success = await window.aiSuggestions.initialize((progress) => {
+                const percent = (progress.progress * 100).toFixed(0);
+                showStatus(`Loading AI model: ${percent}% - ${progress.text || ''}`);
+            });
+
+            if (success) {
+                showStatus("AI model loaded successfully! Enable with 'Toggle AI Suggestions'");
+            } else {
+                showStatus("Failed to load AI model");
+            }
+        }
+    },
+    {
+        name: "Toggle AI Suggestions",
+        description: "Enable/disable inline AI writing suggestions",
+        action: () => {
+            if (!window.aiSuggestions || !window.aiSuggestions.isReady()) {
+                showStatus("Please load AI model first (command: 'Load AI Model')");
+                return;
+            }
+
+            const isEnabled = window.aiSuggestions.toggle();
+            showStatus(isEnabled ? "AI suggestions enabled" : "AI suggestions disabled");
+        }
     }
 ];
 
@@ -3715,6 +3750,24 @@ function filterCommands(searchTerm) {
 editor.addEventListener("keydown", (event) => {
     console.log('KEYDOWN EVENT:', event.key);
 
+    // AI Suggestions: Handle Tab key for accepting suggestions (must be first)
+    if (event.key === 'Tab' && window.aiSuggestions && window.aiSuggestions.currentSuggestion) {
+        event.preventDefault();
+        const accepted = window.aiSuggestions.acceptSuggestion();
+        if (accepted) {
+            // Trigger input event so other handlers know content changed
+            editor.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        return;
+    }
+
+    // AI Suggestions: Clear suggestion on most keys (except arrows for navigation)
+    if (window.aiSuggestions && window.aiSuggestions.currentSuggestion) {
+        if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Shift', 'Control', 'Alt', 'Meta'].includes(event.key)) {
+            window.aiSuggestions.clearSuggestion();
+        }
+    }
+
     // Prevent most keys in typewriter mode (must be first to override all other handlers)
     if (typewriterMode) {
         // Prevent backspace and delete
@@ -5659,3 +5712,75 @@ document.addEventListener("keydown", (event) => {
         }
     }
 });
+
+// ====================
+// AI Suggestions Integration
+// ====================
+
+// Initialize AI Suggestions instance (must be before setupAIIntegration)
+if (typeof AISuggestions !== 'undefined') {
+    window.aiSuggestions = new AISuggestions();
+    console.log('[AI] AISuggestions instance created');
+} else {
+    console.error('[AI] AISuggestions class not found - ai-suggestions.js may not have loaded');
+}
+
+// Status display helper
+function showStatus(message) {
+    console.log('[AI]', message);
+
+    // Simple implementation: temporary message in bottom-left
+    let statusEl = document.getElementById('ai-status');
+    if (!statusEl) {
+        statusEl = document.createElement('div');
+        statusEl.id = 'ai-status';
+        statusEl.style.cssText = `
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 12px 20px;
+            border-radius: 6px;
+            font-size: 14px;
+            z-index: 3000;
+            transition: opacity 0.3s ease;
+        `;
+        document.body.appendChild(statusEl);
+    }
+
+    statusEl.textContent = message;
+    statusEl.style.opacity = '1';
+
+    // Auto-hide after 3 seconds
+    setTimeout(() => {
+        statusEl.style.opacity = '0';
+    }, 3000);
+}
+
+// Setup AI integration
+function setupAIIntegration() {
+    console.log('[AI] Setting up AI integration...');
+
+    // Listen for input events to trigger AI suggestions
+    editor.addEventListener('input', () => {
+        console.log('[AI] Input event fired');
+        console.log('[AI] aiSuggestions exists:', !!window.aiSuggestions);
+        console.log('[AI] isEnabled:', window.aiSuggestions?.isEnabled);
+        console.log('[AI] isReady:', window.aiSuggestions?.isReady());
+
+        if (window.aiSuggestions && window.aiSuggestions.isEnabled && window.aiSuggestions.isReady()) {
+            console.log('[AI] Calling onTyping()');
+            window.aiSuggestions.onTyping();
+        }
+    });
+
+    console.log('[AI] Integration setup complete');
+}
+
+// Initialize AI integration when DOM is ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setupAIIntegration);
+} else {
+    setupAIIntegration();
+}

@@ -758,3 +758,18 @@ body.dark-mode .heading-item.selected {
 #intro-text strong {
     font-weight: 600;
 }
+
+/* ====================
+   AI Suggestions Styles
+   ==================== */
+
+.ai-suggestion {
+    color: #999;
+    font-style: italic;
+    user-select: none;
+    pointer-events: none;
+}
+
+body.dark-mode .ai-suggestion {
+    color: #666;
+}
