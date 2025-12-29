@@ -36,16 +36,6 @@
             </div>
         </div>
     </div>
-    <div id="delete-modal" class="hidden modal-overlay">
-        <div class="modal-content">
-            <h3>Delete Document</h3>
-            <input type="text" id="delete-search" placeholder="Search documents..." autocomplete="off">
-            <div id="delete-list" class="document-list"></div>
-            <div class="modal-buttons">
-                <button id="delete-cancel-button" class="modal-button">Cancel</button>
-            </div>
-        </div>
-    </div>
     <div id="font-modal" class="hidden modal-overlay">
         <div class="modal-content">
             <h3>Select Font</h3>
@@ -94,6 +84,8 @@
         <span id="char-count">0 characters</span>
     </div>
     <input type="file" id="markdown-file-input" accept=".md,.markdown" style="display: none;">
+    <script src="ai-suggestions.js"></script>
     <script src="script.js"></script>
+    <script src="ai-integration.js"></script>
 </body>
 </html>
