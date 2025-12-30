@@ -3519,6 +3519,14 @@ function createNewEphemeralDocument() {
     focusBlock(firstBlock);
     saveContent();
     applyEphemeralFading();
+
+    // Add spacers and center if center mode is active
+    if (centerMode) {
+        setTimeout(() => {
+            addCenterModeSpacers();
+            setTimeout(() => centerCurrentBlock(true), 50);
+        }, 50);
+    }
 }
 
 // Function to change ephemeral word limit
@@ -3540,22 +3548,21 @@ async function changeEphemeralWordLimit() {
 
         const input = document.createElement('input');
         input.type = 'text';
+        input.id = 'ephemeral-limit-input';
         input.value = EPHEMERAL_WORD_LIMIT;
         input.placeholder = 'Enter word limit...';
         input.setAttribute('autocomplete', 'off');
 
-        // Match the styling of other modal inputs
+        // Apply basic styling - colors will be handled by CSS based on light/dark mode
         input.style.cssText = `
             width: 100%;
-            padding: 12px 16px;
-            font-size: 16px;
-            font-family: inherit;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 8px;
-            background: rgba(255, 255, 255, 0.05);
-            color: #ffffff;
+            padding: 14px 16px;
+            font-size: 15px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
             outline: none;
             box-sizing: border-box;
+            background: #fff;
         `;
 
         inputWrapper.appendChild(input);
@@ -3776,6 +3783,10 @@ function enforceEphemeralLimit() {
 
 // Function to apply visual fading to oldest words as limit approaches
 function applyEphemeralFading() {
+    // DISABLED: This feature breaks contenteditable by wrapping words in spans
+    // TODO: Implement using CSS-based approach or different technique
+    return;
+
     if (!currentDocumentIsEphemeral) {
         // Remove any existing fading if not ephemeral
         clearEphemeralFading();
@@ -4147,12 +4158,41 @@ function showCommandModal() {
         const selection = window.getSelection();
         if (selection.rangeCount > 0) {
             const range = selection.getRangeAt(0);
+            let rect = null;
 
-            // Get cursor position directly from range (better for wrapped text)
-            let rect = range.getBoundingClientRect();
+            // Try to get client rects from the range (works well with wrapped text)
+            const rects = range.getClientRects();
+            if (rects.length > 0) {
+                // Use the last rect (represents cursor position on current visual line)
+                rect = rects[rects.length - 1];
+            }
 
-            // If rect is invalid (returns 0,0 position which happens on empty lines), use the containing block's position
-            if (!rect || (rect.top === 0 && rect.left === 0 && rect.width === 0 && rect.height === 0)) {
+            // If no rects or invalid rect, insert a temporary marker
+            if (!rect || (rect.width === 0 && rect.height === 0 && rect.top === 0 && rect.left === 0)) {
+                const marker = document.createElement('span');
+                marker.style.display = 'inline';
+                marker.textContent = '\u200B'; // zero-width space
+
+                // Clone range to avoid modifying original
+                const markerRange = range.cloneRange();
+                markerRange.insertNode(marker);
+
+                // Get position from marker
+                rect = marker.getBoundingClientRect();
+
+                // Remove the marker
+                marker.remove();
+
+                // Normalize to merge text nodes
+                const currentBlock = getCurrentBlock();
+                if (currentBlock) {
+                    const blockContent = currentBlock.querySelector('.block-content');
+                    if (blockContent) blockContent.normalize();
+                }
+            }
+
+            // Final fallback if rect is still invalid (very close to 0,0 or off-screen)
+            if (!rect || (rect.top < 5 && rect.left < 5)) {
                 const currentBlock = getCurrentBlock();
                 if (currentBlock) {
                     const blockContent = currentBlock.querySelector('.block-content');
@@ -4380,9 +4420,24 @@ editor.addEventListener("keydown", (event) => {
                 const selection = window.getSelection();
                 if (selection.rangeCount > 0) {
                     const range = selection.getRangeAt(0);
+                    const blockContent = currentBlock.querySelector('.block-content');
                     // Only prevent if cursor is at or near the start of the block
-                    if (range.startOffset === 0 || event.key === 'Home') {
+                    if ((range.startOffset === 0 || event.key === 'Home') && blockContent) {
                         event.preventDefault();
+
+                        // Synchronously restore cursor to start of current block
+                        const newRange = document.createRange();
+
+                        if (blockContent.firstChild) {
+                            newRange.setStart(blockContent.firstChild, 0);
+                        } else {
+                            newRange.selectNodeContents(blockContent);
+                            newRange.collapse(true);
+                        }
+
+                        selection.removeAllRanges();
+                        selection.addRange(newRange);
+
                         return;
                     }
                 }
@@ -4395,10 +4450,49 @@ editor.addEventListener("keydown", (event) => {
                     const range = selection.getRangeAt(0);
                     const blockContent = currentBlock.querySelector('.block-content');
                     if (blockContent) {
-                        const textLength = blockContent.textContent.length;
-                        // Only prevent if cursor is at or near the end of the block
-                        if (range.startOffset >= textLength || event.key === 'End') {
+                        // Check if cursor is at the very end of the block
+                        const isAtEnd = () => {
+                            if (event.key === 'End') return true;
+
+                            const lastChild = blockContent.lastChild;
+                            if (!lastChild) return true;
+
+                            // Check if we're at the last position
+                            if (range.startContainer === lastChild) {
+                                const length = lastChild.nodeType === Node.TEXT_NODE ? lastChild.length : 0;
+                                return range.startOffset >= length;
+                            }
+
+                            // Check if cursor is after the last child
+                            if (range.startContainer === blockContent) {
+                                return range.startOffset >= blockContent.childNodes.length;
+                            }
+
+                            return false;
+                        };
+
+                        if (isAtEnd()) {
                             event.preventDefault();
+
+                            // Synchronously restore cursor to end of current block
+                            const newRange = document.createRange();
+
+                            // Place cursor at the very end of the block content
+                            if (blockContent.lastChild) {
+                                const lastNode = blockContent.lastChild;
+                                if (lastNode.nodeType === Node.TEXT_NODE) {
+                                    newRange.setStart(lastNode, lastNode.length);
+                                } else {
+                                    newRange.setStartAfter(lastNode);
+                                }
+                            } else {
+                                newRange.selectNodeContents(blockContent);
+                            }
+
+                            newRange.collapse(true);
+                            selection.removeAllRanges();
+                            selection.addRange(newRange);
+
                             return;
                         }
                     }
@@ -5342,6 +5436,12 @@ editor.addEventListener("beforeinput", (event) => {
     const selection = window.getSelection();
     if (!selection.rangeCount) return;
 
+    // Skip this check if user has a multi-element selection (like select-all)
+    // In that case, let the browser handle deletion naturally
+    if (!selection.isCollapsed) {
+        return;
+    }
+
     const range = selection.getRangeAt(0);
     let node = range.startContainer;
 
@@ -5448,6 +5548,14 @@ editor.addEventListener("input", (event) => {
         }
     });
 
+    // Ensure center mode spacers exist if center mode is active
+    if (centerMode) {
+        const hasSpacers = editor.querySelector('.center-spacer-top') && editor.querySelector('.center-spacer-bottom');
+        if (!hasSpacers) {
+            addCenterModeSpacers();
+        }
+    }
+
     if (wordCountVisible) {
         updateWordCount();
     }
@@ -5457,8 +5565,16 @@ editor.addEventListener("input", (event) => {
     // Center current block immediately during typing (instant to prevent drift)
     centerCurrentBlock(true);
 
-    // Enforce ephemeral word limit
-    enforceEphemeralLimit();
+    // Enforce ephemeral word limit (only when adding content, not deleting)
+    // This prevents interference with manual deletions
+    const isDeletion = event.inputType && (
+        event.inputType.startsWith('delete') ||
+        event.inputType === 'historyUndo'
+    );
+
+    if (!isDeletion) {
+        enforceEphemeralLimit();
+    }
 
     // Apply visual fading to oldest words
     applyEphemeralFading();
@@ -5654,34 +5770,40 @@ editor.addEventListener("keyup", () => {
 
 // Update word count when selection changes (for selected text counting)
 document.addEventListener("selectionchange", () => {
-    // Prevent cursor from being in spacer divs (center mode)
+    // Prevent cursor from escaping blocks in center mode
     if (centerMode) {
         const selection = window.getSelection();
         if (selection.rangeCount > 0) {
             const range = selection.getRangeAt(0);
             let node = range.startContainer;
 
-            // Walk up the DOM tree to find if we're in a spacer
-            let currentNode = node;
-            while (currentNode && currentNode !== editor) {
-                if (currentNode.id === 'center-mode-top-spacer' || currentNode.id === 'center-mode-bottom-spacer') {
-                    // We're in a spacer - move cursor to nearest content block
-                    const allBlocks = Array.from(editor.querySelectorAll('.block'));
-                    if (allBlocks.length > 0) {
-                        const targetBlock = currentNode.id === 'center-mode-top-spacer' ? allBlocks[0] : allBlocks[allBlocks.length - 1];
-                        const blockContent = targetBlock.querySelector('.block-content');
-                        if (blockContent) {
-                            const newRange = document.createRange();
-                            const textNode = blockContent.firstChild || blockContent;
-                            newRange.setStart(textNode, currentNode.id === 'center-mode-top-spacer' ? 0 : textNode.textContent?.length || 0);
-                            newRange.collapse(true);
-                            selection.removeAllRanges();
-                            selection.addRange(newRange);
-                        }
-                    }
+            // Check if we're inside a block-content element
+            let insideBlock = false;
+            let inTopSpacer = false;
+            let currentNode = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+
+            while (currentNode && currentNode !== document.body) {
+                if (currentNode.classList && currentNode.classList.contains('block-content')) {
+                    insideBlock = true;
                     break;
                 }
-                currentNode = currentNode.parentNode;
+                if (currentNode.id === 'center-mode-top-spacer') {
+                    inTopSpacer = true;
+                    break;
+                }
+                if (currentNode.id === 'center-mode-bottom-spacer') {
+                    break;
+                }
+                currentNode = currentNode.parentElement;
+            }
+
+            // If not inside a block, move cursor back
+            if (!insideBlock) {
+                const allBlocks = Array.from(editor.querySelectorAll('.block'));
+                if (allBlocks.length > 0) {
+                    const targetBlock = inTopSpacer ? allBlocks[0] : allBlocks[allBlocks.length - 1];
+                    focusBlock(targetBlock, !inTopSpacer); // true = end, false = start
+                }
             }
         }
     }

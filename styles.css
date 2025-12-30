@@ -606,7 +606,8 @@ body.dark-mode #save-name-input,
 body.dark-mode #load-search,
 body.dark-mode #delete-search,
 body.dark-mode #font-search,
-body.dark-mode #heading-search {
+body.dark-mode #heading-search,
+body.dark-mode #ephemeral-limit-input {
     background: #3d3d3d;
     color: #e0e0e0;
     border-color: #555;
