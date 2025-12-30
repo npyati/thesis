@@ -372,12 +372,12 @@ const commands = [
     },
     {
         name: "New Ephemeral Document",
-        description: "Create fresh ephemeral document (100-word rolling window)",
+        description: "Write in pure flow - oldest words fade away as new thoughts emerge",
         action: createNewEphemeralDocument
     },
     {
         name: "Change Ephemeral Word Limit",
-        description: "Set the maximum word count for ephemeral documents",
+        description: "Set how many words linger before fading into the past",
         action: changeEphemeralWordLimit
     },
     {
@@ -610,8 +610,8 @@ const commands = [
         action: showWordCount
     },
     {
-        name: "Clear All",
-        description: "Clear all text from the editor",
+        name: "New Document",
+        description: "Start a new document",
         action: clearAll
     },
     {
@@ -1203,6 +1203,21 @@ function loadContent() {
         editor.appendChild(firstBlock);
         focusBlock(firstBlock);
     }
+
+    // Update center mode spacers if center mode is active (after content is loaded)
+    if (centerMode) {
+        // Use RAF to ensure layout is complete before adding spacers
+        requestAnimationFrame(() => {
+            addCenterModeSpacers();
+            // Double RAF to ensure spacers are fully rendered before centering
+            requestAnimationFrame(() => {
+                centerCurrentBlock(true);
+            });
+        });
+    }
+
+    // Apply ephemeral fading if document is ephemeral
+    applyEphemeralFading();
 }
 
 // Function to convert current blocks to markdown
@@ -1376,10 +1391,12 @@ function showWordCount() {
 
 // Function to clear all text
 async function clearAll() {
-    const confirmed = await showConfirm("Are you sure you want to clear all text?");
+    const confirmed = await showConfirm("Start a new document?");
     if (confirmed) {
         editor.innerHTML = "";
         currentDocumentName = null; // Clear current document pointer
+        currentDocumentIsEphemeral = false; // New documents are not ephemeral
+        clearEphemeralFading();
 
         // Clear file handle for file editing
         currentFileHandle = null;
@@ -1404,11 +1421,13 @@ async function clearAll() {
         // Focus the new block
         focusBlock(firstBlock);
 
-        // Center the block if center mode is active (double RAF ensures layout is complete)
+        // Add spacers and center if center mode is active
         if (centerMode) {
-            requestAnimationFrame(() => {
-                requestAnimationFrame(() => centerCurrentBlock(true));
-            });
+            // Use setTimeout to ensure content is fully rendered
+            setTimeout(() => {
+                addCenterModeSpacers();
+                setTimeout(() => centerCurrentBlock(true), 50);
+            }, 50);
         }
     }
 }
@@ -2833,6 +2852,7 @@ function performSave() {
 
     // Saving makes document permanent
     currentDocumentIsEphemeral = false;
+    clearEphemeralFading();
 
     const content = editor.innerHTML;
     const docs = getSavedDocuments();
@@ -2883,6 +2903,7 @@ function performSave() {
 async function quickSave() {
     // Saving makes document permanent
     currentDocumentIsEphemeral = false;
+    clearEphemeralFading();
 
     // Priority 1: If working on a file, save to file
     if (currentFileHandle) {
@@ -2986,6 +3007,7 @@ async function loadDocumentByName(docName) {
         editor.innerHTML = content;
         currentDocumentName = docName; // Track current document
         currentDocumentIsEphemeral = false; // Saved documents are always permanent
+        clearEphemeralFading();
 
         // Update URL with document ID
         const docs = getSavedDocuments();
@@ -3000,9 +3022,10 @@ async function loadDocumentByName(docName) {
         loadModal.classList.add("hidden");
         editor.focus();
 
-        // Center the first block if center mode is active (double RAF ensures layout is complete)
+        // Add spacers and center if center mode is active
         if (centerMode) {
             requestAnimationFrame(() => {
+                addCenterModeSpacers();
                 requestAnimationFrame(() => centerCurrentBlock(true));
             });
         }
@@ -3040,14 +3063,15 @@ async function loadDocumentById(docId) {
                 editor.innerHTML = content;
                 currentDocumentName = name;
                 currentDocumentIsEphemeral = false; // Saved documents are always permanent
+                clearEphemeralFading();
 
                 // Update page title
                 updatePageTitle(name);
 
-
-                // Center the first block if center mode is active (double RAF ensures layout is complete)
+                // Add spacers and center if center mode is active
                 if (centerMode) {
                     requestAnimationFrame(() => {
+                        addCenterModeSpacers();
                         requestAnimationFrame(() => centerCurrentBlock(true));
                     });
                 }
@@ -3494,6 +3518,7 @@ function createNewEphemeralDocument() {
     clearPageTitle();
     focusBlock(firstBlock);
     saveContent();
+    applyEphemeralFading();
 }
 
 // Function to change ephemeral word limit
@@ -3578,6 +3603,7 @@ async function changeEphemeralWordLimit() {
 
             if (currentDocumentIsEphemeral) {
                 updateWordCount();
+                applyEphemeralFading();
             }
 
             dialogModal.classList.add('hidden');
@@ -3746,6 +3772,166 @@ function enforceEphemeralLimit() {
         }
         // If current block was not modified, leave cursor where it is
     }
+}
+
+// Function to apply visual fading to oldest words as limit approaches
+function applyEphemeralFading() {
+    if (!currentDocumentIsEphemeral) {
+        // Remove any existing fading if not ephemeral
+        clearEphemeralFading();
+        return;
+    }
+
+    // Count total words in document
+    const allBlocks = Array.from(editor.querySelectorAll('.block'));
+    let totalWords = 0;
+
+    allBlocks.forEach(block => {
+        const content = block.querySelector('.block-content');
+        if (content) {
+            const text = content.textContent || '';
+            const words = text.trim().split(/\s+/).filter(w => w.length > 0);
+            totalWords += words.length;
+        }
+    });
+
+    // Calculate how many words should be fading
+    // Fading starts when we're within 5 words of the limit
+    const fadeThreshold = EPHEMERAL_WORD_LIMIT - 5;
+    const wordsToFade = Math.min(5, Math.max(0, totalWords - fadeThreshold));
+
+    if (wordsToFade === 0) {
+        // No fading needed, clear any existing
+        clearEphemeralFading();
+        return;
+    }
+
+    // Save cursor position before modifying DOM
+    const selection = window.getSelection();
+    let cursorInfo = null;
+
+    if (selection.rangeCount > 0) {
+        const range = selection.getRangeAt(0);
+        cursorInfo = {
+            container: range.startContainer,
+            offset: range.startOffset,
+            block: getCurrentBlock()
+        };
+    }
+
+    // Apply fading to first wordsToFade words
+    let wordIndex = 0;
+    let fadingComplete = false;
+
+    for (const block of allBlocks) {
+        if (fadingComplete) {
+            // Clear fading from remaining blocks
+            const content = block.querySelector('.block-content');
+            if (content && content.querySelector('.ephemeral-word')) {
+                const text = content.textContent;
+                content.textContent = text;
+            }
+            continue;
+        }
+
+        const content = block.querySelector('.block-content');
+        if (!content) continue;
+
+        const text = content.textContent || '';
+        const words = text.trim().split(/\s+/).filter(w => w.length > 0);
+
+        if (words.length === 0) continue;
+
+        // Create wrapped version
+        const fragments = [];
+        let needsUpdate = false;
+
+        for (let i = 0; i < words.length; i++) {
+            if (wordIndex < wordsToFade) {
+                // Calculate opacity for this word
+                // Word 0 (oldest): most faded (opacity 0.15)
+                // Each subsequent word: less faded
+                const fadePosition = wordsToFade - wordIndex - 1; // 4, 3, 2, 1, 0
+                const opacity = 1.0 - (fadePosition * 0.17); // 0.15, 0.32, 0.49, 0.66, 0.83
+
+                const span = document.createElement('span');
+                span.className = 'ephemeral-word';
+                span.style.opacity = opacity.toFixed(2);
+                span.style.transition = 'opacity 0.3s ease';
+                span.textContent = words[i];
+                fragments.push(span);
+                needsUpdate = true;
+            } else {
+                fragments.push(document.createTextNode(words[i]));
+                fadingComplete = true;
+            }
+
+            // Add space between words (except after last word)
+            if (i < words.length - 1) {
+                fragments.push(document.createTextNode(' '));
+            }
+
+            wordIndex++;
+        }
+
+        // Update content if needed
+        if (needsUpdate || content.querySelector('.ephemeral-word')) {
+            content.innerHTML = '';
+            fragments.forEach(frag => content.appendChild(frag));
+        }
+    }
+
+    // Restore cursor position
+    if (cursorInfo && cursorInfo.block && cursorInfo.block.parentNode) {
+        try {
+            const content = cursorInfo.block.querySelector('.block-content');
+            if (content && content.firstChild) {
+                // Find the appropriate text node to place cursor
+                let targetNode = content.firstChild;
+                let targetOffset = 0;
+
+                // Try to find a text node, preferring the last one if multiple exist
+                const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+                let lastTextNode = null;
+                while (walker.nextNode()) {
+                    lastTextNode = walker.currentNode;
+                }
+
+                if (lastTextNode) {
+                    targetNode = lastTextNode;
+                    targetOffset = Math.min(cursorInfo.offset, lastTextNode.length);
+                } else if (targetNode.nodeType === Node.TEXT_NODE) {
+                    targetOffset = Math.min(cursorInfo.offset, targetNode.length);
+                } else {
+                    targetOffset = 0;
+                }
+
+                const newRange = document.createRange();
+                newRange.setStart(targetNode, targetOffset);
+                newRange.collapse(true);
+                selection.removeAllRanges();
+                selection.addRange(newRange);
+            }
+        } catch (e) {
+            // If restoration fails, just focus the block
+            if (cursorInfo.block) {
+                focusBlock(cursorInfo.block, true);
+            }
+        }
+    }
+}
+
+// Function to clear ephemeral fading
+function clearEphemeralFading() {
+    const allBlocks = Array.from(editor.querySelectorAll('.block'));
+
+    allBlocks.forEach(block => {
+        const content = block.querySelector('.block-content');
+        if (content && content.querySelector('.ephemeral-word')) {
+            const text = content.textContent;
+            content.textContent = text;
+        }
+    });
 }
 
 // Function to update which block has focus with gradient dimming
@@ -3963,7 +4149,16 @@ function showCommandModal() {
             const range = selection.getRangeAt(0);
 
             // Get cursor position directly from range (better for wrapped text)
-            const rect = range.getBoundingClientRect();
+            let rect = range.getBoundingClientRect();
+
+            // If rect is invalid (returns 0,0 position which happens on empty lines), use the containing block's position
+            if (!rect || (rect.top === 0 && rect.left === 0 && rect.width === 0 && rect.height === 0)) {
+                const currentBlock = getCurrentBlock();
+                if (currentBlock) {
+                    const blockContent = currentBlock.querySelector('.block-content');
+                    rect = (blockContent || currentBlock).getBoundingClientRect();
+                }
+            }
 
             let left = rect.left;
             let top = rect.bottom + 5;
@@ -5010,7 +5205,7 @@ if (localStorage.getItem("forwardOnlyMode") === "true") {
 if (localStorage.getItem("centerMode") === "true") {
     centerMode = true;
     document.body.classList.add("center-mode");
-    addCenterModeSpacers();
+    // Don't add spacers here - they'll be added after content loads in loadContent()
 }
 
 // Load focus mode preference on page load
@@ -5264,6 +5459,9 @@ editor.addEventListener("input", (event) => {
 
     // Enforce ephemeral word limit
     enforceEphemeralLimit();
+
+    // Apply visual fading to oldest words
+    applyEphemeralFading();
 });
 
 // Handle copy event to create proper HTML lists
@@ -5417,6 +5615,9 @@ editor.addEventListener("paste", (event) => {
 
     // Enforce ephemeral word limit
     enforceEphemeralLimit();
+
+    // Apply visual fading to oldest words
+    applyEphemeralFading();
 });
 
 // Handle clicks on editor - create first block if empty
