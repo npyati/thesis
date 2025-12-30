@@ -162,6 +162,7 @@ function focusBlock(blockElement, atEnd = false) {
 const commandModal = document.getElementById("command-modal");
 const commandSearch = document.getElementById("command-search");
 const commandList = document.getElementById("command-list");
+const modeStatus = document.getElementById("mode-status");
 const wordCountDisplay = document.getElementById("word-count-display");
 const wordCountSpan = document.getElementById("word-count");
 const charCountSpan = document.getElementById("char-count");
@@ -210,10 +211,14 @@ let selectedHeadingIndex = 0;
 let customFonts = [];
 let currentFontSize = 18; // Default font size in pixels
 let currentLineHeight = 1.6; // Default line height
-let typewriterMode = false;
+let forwardOnlyMode = false;
+let centerMode = false;
 let focusMode = false;
+let ephemeralMode = false;
+let EPHEMERAL_WORD_LIMIT = 100;
 let multiBlockSelection = []; // Store blocks when multi-block operation is triggered
 let currentDocumentName = null; // Track the currently loaded/saved document
+let currentDocumentIsEphemeral = false; // Track if current document is ephemeral
 let filteredCommandsList = []; // Store the currently filtered commands for keyboard navigation
 let currentFileHandle = null; // Track the current file handle for direct file editing
 let currentFileName = null; // Track the current file name
@@ -246,7 +251,6 @@ async function saveFileHandleToDB(handle, fileName) {
         const store = transaction.objectStore(STORE_NAME);
 
         await store.put({ handle, fileName }, 'currentFile');
-        console.log('File handle saved to IndexedDB');
     } catch (error) {
         console.error('Error saving file handle:', error);
     }
@@ -278,7 +282,6 @@ async function clearFileHandleFromDB() {
         const store = transaction.objectStore(STORE_NAME);
 
         await store.delete('currentFile');
-        console.log('File handle cleared from IndexedDB');
     } catch (error) {
         console.error('Error clearing file handle:', error);
     }
@@ -366,6 +369,16 @@ const commands = [
         name: "Delete Document",
         description: "Delete a saved document",
         action: deleteDocument
+    },
+    {
+        name: "New Ephemeral Document",
+        description: "Create fresh ephemeral document (100-word rolling window)",
+        action: createNewEphemeralDocument
+    },
+    {
+        name: "Change Ephemeral Word Limit",
+        description: "Set the maximum word count for ephemeral documents",
+        action: changeEphemeralWordLimit
     },
     {
         name: "Jump to Heading",
@@ -562,9 +575,14 @@ const commands = [
         action: decreaseLineHeight
     },
     {
-        name: "Toggle Typewriter Mode",
-        description: "Enable/disable forward-only writing",
-        action: toggleTypewriterMode
+        name: "Toggle Forward-Only Mode",
+        description: "Prevent backspace, deletion, and cursor movement",
+        action: toggleForwardOnlyMode
+    },
+    {
+        name: "Toggle Center Mode",
+        description: "Keep active line centered in viewport",
+        action: toggleCenterMode
     },
     {
         name: "Toggle Focus Mode",
@@ -1078,15 +1096,27 @@ function removePatternAndPreserveText(node, cursorPosition, patternLength) {
 // Function to save content to localStorage
 function saveContent() {
     const content = editor.innerHTML;
-    localStorage.setItem("editorContent", content);
-    console.log("Content saved");
+    const saveData = {
+        content: content,
+        isEphemeral: currentDocumentIsEphemeral
+    };
+    localStorage.setItem("editorContent", JSON.stringify(saveData));
 }
 
 // Function to load content from localStorage
 function loadContent() {
-    const savedContent = localStorage.getItem("editorContent");
-    if (savedContent) {
-        editor.innerHTML = savedContent;
+    const savedData = localStorage.getItem("editorContent");
+    if (savedData) {
+        // Try parsing as JSON (new format with ephemeral property)
+        try {
+            const parsed = JSON.parse(savedData);
+            editor.innerHTML = parsed.content;
+            currentDocumentIsEphemeral = parsed.isEphemeral || false;
+        } catch (e) {
+            // Fallback for old format (just HTML string)
+            editor.innerHTML = savedData;
+            currentDocumentIsEphemeral = false;
+        }
 
         // Ensure we have at least one block
         if (editor.children.length === 0) {
@@ -1099,7 +1129,6 @@ function loadContent() {
         const hasBlocks = editor.querySelector('.block') !== null;
         if (!hasBlocks) {
             // Old format detected - clear and start fresh
-            console.log("Old format detected, starting fresh");
             editor.innerHTML = '';
             const firstBlock = createBlockElement('text', '');
             editor.appendChild(firstBlock);
@@ -1154,10 +1183,8 @@ function loadContent() {
         // Clean up any loose text nodes in the editor (text not inside blocks)
         Array.from(editor.childNodes).forEach(node => {
             if (node.nodeType === Node.TEXT_NODE && node.textContent.trim() !== '') {
-                console.log("Removing loose text node:", node.textContent);
                 node.remove();
             } else if (node.nodeType === Node.ELEMENT_NODE && !node.classList.contains('block')) {
-                console.log("Removing non-block element:", node);
                 node.remove();
             }
         });
@@ -1200,7 +1227,6 @@ async function saveToFile() {
         // Close the file
         await writable.close();
 
-        console.log(`File "${currentFileName}" saved`);
     } catch (error) {
         console.error('Error saving to file:', error);
         // If we lose permission, clear the file handle
@@ -1254,7 +1280,6 @@ async function saveToNewFile() {
             // Update page title with filename
             updatePageTitle(file.name);
 
-            console.log(`File "${file.name}" saved`);
         } else {
             // Fallback to regular export for unsupported browsers
             exportAsMarkdown();
@@ -1326,13 +1351,20 @@ function updateWordCount() {
     const words = text.trim().split(/\s+/).filter(w => w.length > 0).length;
     const chars = text.length;
 
-    wordCountSpan.textContent = `${words} ${words === 1 ? 'word' : 'words'}`;
+    if (currentDocumentIsEphemeral) {
+        wordCountSpan.textContent = `${words}/${EPHEMERAL_WORD_LIMIT} ${words === 1 ? 'word' : 'words'}`;
+    } else {
+        wordCountSpan.textContent = `${words} ${words === 1 ? 'word' : 'words'}`;
+    }
     charCountSpan.textContent = `${chars} ${chars === 1 ? 'character' : 'characters'}`;
 }
 
 // Function to toggle word count display
 function showWordCount() {
     wordCountVisible = !wordCountVisible;
+
+    // Save preference to localStorage
+    localStorage.setItem("wordCountVisible", wordCountVisible);
 
     if (wordCountVisible) {
         wordCountDisplay.classList.remove("hidden");
@@ -1371,6 +1403,13 @@ async function clearAll() {
 
         // Focus the new block
         focusBlock(firstBlock);
+
+        // Center the block if center mode is active (double RAF ensures layout is complete)
+        if (centerMode) {
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => centerCurrentBlock(true));
+            });
+        }
     }
 }
 
@@ -1379,7 +1418,6 @@ function copyAll() {
     const text = editor.innerText || editor.textContent || "";
     navigator.clipboard.writeText(text).then(() => {
         // Could show a toast notification here
-        console.log("Content copied to clipboard");
     }).catch(err => {
         console.error("Failed to copy:", err);
     });
@@ -1480,7 +1518,6 @@ async function clearStorage() {
     const confirmed = await showConfirm("Are you sure you want to clear all saved content from browser memory?");
     if (confirmed) {
         localStorage.removeItem("editorContent");
-        console.log("Storage cleared");
     }
 }
 
@@ -1748,7 +1785,6 @@ function exportAsMarkdown() {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
 
-    console.log('Markdown exported successfully');
 }
 
 // Function to export all saved documents as Markdown files in a ZIP
@@ -1798,7 +1834,6 @@ async function exportAllAsMarkdown() {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
 
-    console.log(`Exported ${files.length} documents as ${zipFilename}`);
 }
 
 // Function to copy content as Markdown to clipboard
@@ -1880,7 +1915,6 @@ async function copyAsMarkdown() {
     // Copy to clipboard
     try {
         await navigator.clipboard.writeText(cleanedMarkdown);
-        console.log('Markdown copied to clipboard');
     } catch (err) {
         console.error('Failed to copy to clipboard:', err);
     }
@@ -2348,7 +2382,6 @@ function exportAsWord() {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
 
-    console.log('Word document exported successfully');
 }
 
 // Function to convert Markdown to HTML
@@ -2584,7 +2617,6 @@ async function importFromMarkdown() {
             // Update page title with filename
             updatePageTitle(file.name);
 
-            console.log(`Markdown file "${file.name}" opened for direct editing`);
 
         } else {
             // Fallback to traditional file input
@@ -2674,7 +2706,6 @@ markdownFileInput.addEventListener('change', (event) => {
             focusBlock(blocks[0]);
         }
 
-        console.log('Markdown imported successfully');
 
         // Clear the input so the same file can be selected again
         markdownFileInput.value = '';
@@ -2800,6 +2831,9 @@ function performSave() {
     const docName = saveNameInput.value.trim();
     if (!docName) return;
 
+    // Saving makes document permanent
+    currentDocumentIsEphemeral = false;
+
     const content = editor.innerHTML;
     const docs = getSavedDocuments();
 
@@ -2808,18 +2842,18 @@ function performSave() {
     const existingIndex = docs.findIndex(d => d.name === docName);
     if (existingIndex >= 0) {
         docs[existingIndex].timestamp = Date.now();
+        docs[existingIndex].isEphemeral = currentDocumentIsEphemeral;
         docId = docs[existingIndex].id;
     } else {
         docId = generateDocumentId();
-        docs.push({ id: docId, name: docName, timestamp: Date.now() });
+        docs.push({ id: docId, name: docName, timestamp: Date.now(), isEphemeral: currentDocumentIsEphemeral });
     }
 
     // Store by both ID and name for backward compatibility
     localStorage.setItem(`doc_${docName}`, content);
-    localStorage.setItem(`docById_${docId}`, JSON.stringify({ name: docName, content: content }));
+    localStorage.setItem(`docById_${docId}`, JSON.stringify({ name: docName, content: content, isEphemeral: currentDocumentIsEphemeral }));
     setSavedDocuments(docs);
     currentDocumentName = docName; // Track current document
-    console.log(`Document "${docName}" saved with ID: ${docId}`);
 
     // Update URL with document ID
     updateURL(docId);
@@ -2847,6 +2881,9 @@ function performSave() {
 
 // Function to quickly save to the current document or file
 async function quickSave() {
+    // Saving makes document permanent
+    currentDocumentIsEphemeral = false;
+
     // Priority 1: If working on a file, save to file
     if (currentFileHandle) {
         await saveToFile();
@@ -2862,11 +2899,12 @@ async function quickSave() {
         const existingIndex = docs.findIndex(d => d.name === currentDocumentName);
         if (existingIndex >= 0) {
             docs[existingIndex].timestamp = Date.now();
+            docs[existingIndex].isEphemeral = currentDocumentIsEphemeral;
             const docId = docs[existingIndex].id;
 
             // Store by both ID and name
             localStorage.setItem(`doc_${currentDocumentName}`, content);
-            localStorage.setItem(`docById_${docId}`, JSON.stringify({ name: currentDocumentName, content: content }));
+            localStorage.setItem(`docById_${docId}`, JSON.stringify({ name: currentDocumentName, content: content, isEphemeral: currentDocumentIsEphemeral }));
             setSavedDocuments(docs);
 
             // Update URL with document ID
@@ -2875,11 +2913,9 @@ async function quickSave() {
             // Update page title
             updatePageTitle(currentDocumentName);
 
-            console.log(`Browser document "${currentDocumentName}" saved with ID: ${docId}`);
         } else {
             localStorage.setItem(`doc_${currentDocumentName}`, content);
             setSavedDocuments(docs);
-            console.log(`Browser document "${currentDocumentName}" saved`);
         }
         return;
     }
@@ -2949,6 +2985,7 @@ async function loadDocumentByName(docName) {
     if (content) {
         editor.innerHTML = content;
         currentDocumentName = docName; // Track current document
+        currentDocumentIsEphemeral = false; // Saved documents are always permanent
 
         // Update URL with document ID
         const docs = getSavedDocuments();
@@ -2960,9 +2997,15 @@ async function loadDocumentByName(docName) {
         // Update page title
         updatePageTitle(docName);
 
-        console.log(`Document "${docName}" loaded`);
         loadModal.classList.add("hidden");
         editor.focus();
+
+        // Center the first block if center mode is active (double RAF ensures layout is complete)
+        if (centerMode) {
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => centerCurrentBlock(true));
+            });
+        }
     } else {
         await showAlert(`Document "${docName}" not found.`);
     }
@@ -2996,11 +3039,18 @@ async function loadDocumentById(docId) {
             if (doc) {
                 editor.innerHTML = content;
                 currentDocumentName = name;
+                currentDocumentIsEphemeral = false; // Saved documents are always permanent
 
                 // Update page title
                 updatePageTitle(name);
 
-                console.log(`Document "${name}" loaded from URL (ID: ${docId})`);
+
+                // Center the first block if center mode is active (double RAF ensures layout is complete)
+                if (centerMode) {
+                    requestAnimationFrame(() => {
+                        requestAnimationFrame(() => centerCurrentBlock(true));
+                    });
+                }
             } else {
                 // Document was deleted
                 showDeletedDocModal();
@@ -3318,17 +3368,92 @@ function loadLineHeight() {
     }
 }
 
-// Function to toggle typewriter mode
-function toggleTypewriterMode() {
-    typewriterMode = !typewriterMode;
+// Function to toggle forward-only mode
+function toggleForwardOnlyMode() {
+    forwardOnlyMode = !forwardOnlyMode;
 
     // Toggle class for styling
-    document.body.classList.toggle("typewriter-mode", typewriterMode);
+    document.body.classList.toggle("forward-only-mode", forwardOnlyMode);
 
     // Save preference to localStorage
-    localStorage.setItem("typewriterMode", typewriterMode);
+    localStorage.setItem("forwardOnlyMode", forwardOnlyMode);
 
-    console.log(`Typewriter mode ${typewriterMode ? 'enabled' : 'disabled'}`);
+}
+
+// Function to toggle center mode
+function toggleCenterMode() {
+    centerMode = !centerMode;
+
+    // Toggle class for styling
+    document.body.classList.toggle("center-mode", centerMode);
+
+    // Add or remove spacer divs instead of padding
+    if (centerMode) {
+        addCenterModeSpacers();
+    } else {
+        removeCenterModeSpacers();
+    }
+
+    // Save preference to localStorage
+    localStorage.setItem("centerMode", centerMode);
+
+}
+
+// Add invisible spacer divs for center mode
+function addCenterModeSpacers() {
+    // Remove existing spacers if any
+    removeCenterModeSpacers();
+
+    // Create top spacer (100vh for unlimited scroll space above)
+    const topSpacer = document.createElement('div');
+    topSpacer.id = 'center-mode-top-spacer';
+    topSpacer.style.height = '100vh';
+    topSpacer.style.userSelect = 'none';
+    topSpacer.style.cursor = 'default';
+    topSpacer.setAttribute('contenteditable', 'false');
+    topSpacer.setAttribute('data-spacer', 'true');
+
+    // Prevent interaction with top spacer - focus first block instead
+    topSpacer.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const blocks = Array.from(editor.querySelectorAll('.block'));
+        if (blocks.length > 0) {
+            focusBlock(blocks[0]);
+        }
+    });
+
+    // Create bottom spacer (100vh for unlimited scroll space below)
+    const bottomSpacer = document.createElement('div');
+    bottomSpacer.id = 'center-mode-bottom-spacer';
+    bottomSpacer.style.height = '100vh';
+    bottomSpacer.style.userSelect = 'none';
+    bottomSpacer.style.cursor = 'default';
+    bottomSpacer.setAttribute('contenteditable', 'false');
+    bottomSpacer.setAttribute('data-spacer', 'true');
+
+    // Prevent interaction with bottom spacer - focus last block instead
+    bottomSpacer.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const blocks = Array.from(editor.querySelectorAll('.block'));
+        if (blocks.length > 0) {
+            focusBlock(blocks[blocks.length - 1], true);
+        }
+    });
+
+    // Insert spacers
+    editor.insertBefore(topSpacer, editor.firstChild);
+    editor.appendChild(bottomSpacer);
+}
+
+// Remove center mode spacer divs
+function removeCenterModeSpacers() {
+    const topSpacer = document.getElementById('center-mode-top-spacer');
+    const bottomSpacer = document.getElementById('center-mode-bottom-spacer');
+
+    if (topSpacer) topSpacer.remove();
+    if (bottomSpacer) bottomSpacer.remove();
 }
 
 // Function to toggle focus mode
@@ -3344,37 +3469,347 @@ function toggleFocusMode() {
     if (focusMode) {
         updateFocusParagraph();
     } else {
-        // Remove all active classes when disabling
+        // Remove all active classes and reset opacity when disabling
         const allBlocks = editor.querySelectorAll('.block');
-        allBlocks.forEach(el => el.classList.remove('focus-active'));
+        allBlocks.forEach(el => {
+            el.classList.remove('focus-active');
+            el.style.opacity = ''; // Reset opacity
+        });
     }
 
-    console.log(`Focus mode ${focusMode ? 'enabled' : 'disabled'}`);
 }
 
-// Function to update which block has focus
+// Function to create a new ephemeral document
+function createNewEphemeralDocument() {
+    editor.innerHTML = '';
+    const firstBlock = createBlockElement('text', '');
+    editor.appendChild(firstBlock);
+
+    currentDocumentIsEphemeral = true;
+    currentDocumentName = null;
+    currentFileHandle = null;
+    currentFileName = null;
+
+    clearURL();
+    clearPageTitle();
+    focusBlock(firstBlock);
+    saveContent();
+}
+
+// Function to change ephemeral word limit
+async function changeEphemeralWordLimit() {
+    // Save cursor position before opening modal
+    let savedSelection = null;
+    const selection = window.getSelection();
+    if (selection.rangeCount > 0) {
+        savedSelection = selection.getRangeAt(0).cloneRange();
+    }
+
+    // Close command modal first
+    commandModal.classList.add("hidden");
+
+    return new Promise((resolve) => {
+        // Create input element styled like the other modals
+        const inputWrapper = document.createElement('div');
+        inputWrapper.style.marginTop = '15px';
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = EPHEMERAL_WORD_LIMIT;
+        input.placeholder = 'Enter word limit...';
+        input.setAttribute('autocomplete', 'off');
+
+        // Match the styling of other modal inputs
+        input.style.cssText = `
+            width: 100%;
+            padding: 12px 16px;
+            font-size: 16px;
+            font-family: inherit;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.05);
+            color: #ffffff;
+            outline: none;
+            box-sizing: border-box;
+        `;
+
+        inputWrapper.appendChild(input);
+
+        // Set up dialog
+        dialogMessage.innerHTML = '';
+        const title = document.createElement('div');
+        title.textContent = 'Change Ephemeral Word Limit';
+        title.style.marginBottom = '10px';
+        dialogMessage.appendChild(title);
+        dialogMessage.appendChild(inputWrapper);
+
+        dialogConfirmButton.textContent = 'Save';
+        dialogCancelButton.style.display = 'inline-block';
+
+        // Function to restore cursor
+        const restoreCursor = () => {
+            if (savedSelection) {
+                try {
+                    const sel = window.getSelection();
+                    sel.removeAllRanges();
+                    sel.addRange(savedSelection);
+                } catch (e) {
+                    // If cursor restoration fails, just focus the editor
+                    editor.focus();
+                }
+            }
+        };
+
+        const handleConfirm = async () => {
+            const newLimit = input.value.trim();
+            const parsedLimit = parseInt(newLimit, 10);
+
+            if (isNaN(parsedLimit) || parsedLimit < 1) {
+                dialogModal.classList.add('hidden');
+                cleanup();
+                restoreCursor();
+                await showAlert("Please enter a valid number greater than 0.");
+                resolve();
+                return;
+            }
+
+            EPHEMERAL_WORD_LIMIT = parsedLimit;
+            localStorage.setItem("ephemeralWordLimit", parsedLimit);
+
+            if (currentDocumentIsEphemeral) {
+                updateWordCount();
+            }
+
+            dialogModal.classList.add('hidden');
+            cleanup();
+            restoreCursor();
+            await showAlert(`Ephemeral word limit changed to ${parsedLimit} words.`);
+            resolve();
+        };
+
+        const handleCancel = () => {
+            dialogModal.classList.add('hidden');
+            cleanup();
+            restoreCursor();
+            resolve();
+        };
+
+        const handleKeydown = (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                handleConfirm();
+            } else if (event.key === 'Escape') {
+                event.preventDefault();
+                handleCancel();
+            }
+        };
+
+        const cleanup = () => {
+            dialogConfirmButton.removeEventListener('click', handleConfirm);
+            dialogCancelButton.removeEventListener('click', handleCancel);
+            input.removeEventListener('keydown', handleKeydown);
+        };
+
+        // Add event listeners
+        dialogConfirmButton.addEventListener('click', handleConfirm);
+        dialogCancelButton.addEventListener('click', handleCancel);
+        input.addEventListener('keydown', handleKeydown);  // Listen on input instead of document
+
+        // Show modal and focus input with small delay to ensure command modal is fully closed
+        setTimeout(() => {
+            dialogModal.classList.remove('hidden');
+            setTimeout(() => {
+                input.focus();
+                input.select();
+            }, 50);
+        }, 100);
+    });
+}
+
+// Function to toggle ephemeral mode
+function toggleEphemeralMode() {
+    ephemeralMode = !ephemeralMode;
+
+    // Save preference to localStorage
+    localStorage.setItem("ephemeralMode", ephemeralMode);
+
+
+    // Immediately enforce limit if turning on
+    if (ephemeralMode) {
+        enforceEphemeralLimit();
+    }
+}
+
+// Function to enforce ephemeral word limit
+function enforceEphemeralLimit() {
+    if (!currentDocumentIsEphemeral) return;
+
+    // Save which block currently has the cursor
+    const selection = window.getSelection();
+    let currentBlock = null;
+
+    if (selection.rangeCount > 0) {
+        const range = selection.getRangeAt(0);
+        // Find the block containing the cursor
+        let node = range.startContainer;
+        while (node && node !== editor) {
+            if (node.classList && node.classList.contains('block')) {
+                currentBlock = node;
+                break;
+            }
+            node = node.parentNode;
+        }
+    }
+
+    // Count total words in document
+    const allBlocks = Array.from(editor.querySelectorAll('.block'));
+    let totalWords = 0;
+    const blockWordCounts = [];
+
+    // Count words in each block
+    allBlocks.forEach(block => {
+        const content = block.querySelector('.block-content');
+        if (content) {
+            const text = content.textContent || '';
+            const words = text.trim().split(/\s+/).filter(w => w.length > 0);
+            blockWordCounts.push({ block, wordCount: words.length });
+            totalWords += words.length;
+        } else {
+            blockWordCounts.push({ block, wordCount: 0 });
+        }
+    });
+
+
+    // If over limit, remove words from the beginning
+    if (totalWords > EPHEMERAL_WORD_LIMIT) {
+        const wordsToRemove = totalWords - EPHEMERAL_WORD_LIMIT;
+        let wordsRemoved = 0;
+        let currentBlockWasModified = false;
+
+
+        for (let i = 0; i < blockWordCounts.length && wordsRemoved < wordsToRemove; i++) {
+            const { block, wordCount } = blockWordCounts[i];
+            const content = block.querySelector('.block-content');
+            if (!content) continue;
+
+            if (wordsRemoved + wordCount <= wordsToRemove) {
+                // Check if we're removing the block with the cursor
+                if (block === currentBlock) {
+                    currentBlockWasModified = true;
+                }
+                // Remove entire block
+                block.remove();
+                wordsRemoved += wordCount;
+            } else {
+                // Check if we're modifying the block with the cursor
+                if (block === currentBlock) {
+                    currentBlockWasModified = true;
+                }
+                // Remove partial words from this block
+                const wordsToRemoveFromBlock = wordsToRemove - wordsRemoved;
+                const text = content.textContent || '';
+                const words = text.trim().split(/\s+/).filter(w => w.length > 0);
+                const remainingWords = words.slice(wordsToRemoveFromBlock);
+                content.textContent = remainingWords.join(' ');
+                wordsRemoved += wordsToRemoveFromBlock;
+            }
+        }
+
+        // Update numbering after removing blocks
+        updateNumberedBlocks();
+
+        // Only restore cursor if the current block was modified
+        if (currentBlockWasModified) {
+            if (currentBlock && currentBlock.parentNode) {
+                // Current block still exists but was modified, move cursor to end of it
+                const content = currentBlock.querySelector('.block-content');
+                if (content && content.firstChild) {
+                    try {
+                        const range = document.createRange();
+                        const textNode = content.firstChild;
+                        range.setStart(textNode, textNode.length);
+                        range.collapse(true);
+                        selection.removeAllRanges();
+                        selection.addRange(range);
+                    } catch (e) {
+                        // If restoration fails, focus the block
+                        focusBlock(currentBlock, true);
+                    }
+                }
+            } else {
+                // Current block was removed, focus the first remaining block
+                const remainingBlocks = Array.from(editor.querySelectorAll('.block'));
+                if (remainingBlocks.length > 0) {
+                    focusBlock(remainingBlocks[0], true);
+                }
+            }
+        }
+        // If current block was not modified, leave cursor where it is
+    }
+}
+
+// Function to update which block has focus with gradient dimming
 function updateFocusParagraph() {
     if (!focusMode) return;
 
     const currentBlock = getCurrentBlock();
     if (!currentBlock) return;
 
-    // Remove active class from all blocks
-    const allBlocks = editor.querySelectorAll('.block');
-    allBlocks.forEach(el => el.classList.remove('focus-active'));
+    // Get all blocks as an array
+    const allBlocks = Array.from(editor.querySelectorAll('.block'));
+    const currentIndex = allBlocks.indexOf(currentBlock);
 
-    // Add active class to current block
-    currentBlock.classList.add('focus-active');
+    if (currentIndex === -1) return;
+
+
+    // Apply opacity gradient based on distance from current block
+    allBlocks.forEach((block, index) => {
+        // Remove old active class
+        block.classList.remove('focus-active');
+
+        // Calculate distance from focused block
+        const distance = Math.abs(index - currentIndex);
+
+        // Apply opacity based on distance - steep gradient for dramatic effect
+        // Current block: 100%, adjacent: 35%, 2 away: 15%, 3+ away: 8%
+        let opacity;
+        if (distance === 0) {
+            opacity = 1.0;
+            block.classList.add('focus-active');
+        } else if (distance === 1) {
+            opacity = 0.35;
+        } else if (distance === 2) {
+            opacity = 0.15;
+        } else {
+            opacity = 0.08;
+        }
+
+        // Use setProperty with 'important' to override CSS rules
+        block.style.setProperty('opacity', opacity, 'important');
+    });
 }
 
-// Function to center current block in typewriter mode
-function centerCurrentBlock() {
-    if (!typewriterMode) return;
+// Function to center current block in center mode
+function centerCurrentBlock(instant = false) {
+    if (!centerMode) return;
 
     const currentBlock = getCurrentBlock();
-    if (currentBlock) {
-        currentBlock.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
+    if (!currentBlock) return;
+
+    // With 100vh spacers, there's always enough scroll space, so centering is simple
+    const blockRect = currentBlock.getBoundingClientRect();
+    const viewportHeight = window.innerHeight;
+
+    // Position block at 38% from top of viewport
+    const targetPositionFromTop = viewportHeight * 0.38;
+
+    // Calculate how much to scroll: block's current position minus where we want it
+    const scrollTarget = editor.scrollTop + (blockRect.top - targetPositionFromTop);
+
+    editor.scrollTo({
+        top: scrollTarget,
+        behavior: instant ? 'auto' : 'smooth'
+    });
 }
 
 // Function to delete a saved document
@@ -3477,7 +3912,6 @@ async function deleteDocumentByName(docName) {
             editor.focus();
         }
 
-        console.log(`Document "${docName}" deleted`);
     }
 }
 
@@ -3496,9 +3930,31 @@ function filterDeleteDocuments() {
 function showCommandModal() {
     commandModalOpen = true;
     commandModal.classList.remove("hidden");
+    commandModal.style.opacity = "0"; // Hide initially to prevent jump during positioning
     commandSearch.value = "";
     filterCommands(""); // Use filterCommands to apply MRU sorting
     selectedCommandIndex = 0;
+
+    // Update mode status indicator
+    const activeModes = [];
+    if (focusMode) activeModes.push("Focus");
+    if (centerMode) activeModes.push("Center");
+    if (forwardOnlyMode) activeModes.push("Forward-Only");
+    if (currentDocumentIsEphemeral) activeModes.push("Ephemeral");
+    if (document.body.classList.contains("dark-mode")) activeModes.push("Dark");
+    if (wordCountVisible) activeModes.push("Word Count");
+
+
+    if (activeModes.length > 0) {
+        // Create badge elements for each active mode
+        modeStatus.innerHTML = activeModes.map(mode =>
+            `<span class="mode-badge">${mode}</span>`
+        ).join('');
+        modeStatus.style.display = "flex";
+    } else {
+        modeStatus.innerHTML = '';
+        modeStatus.style.display = "none";
+    }
 
     // Position modal near cursor - use setTimeout to ensure modal is visible first
     setTimeout(() => {
@@ -3506,12 +3962,8 @@ function showCommandModal() {
         if (selection.rangeCount > 0) {
             const range = selection.getRangeAt(0);
 
-            // Create a temporary span to get accurate cursor position
-            const span = document.createElement('span');
-            span.textContent = '\u200B'; // Zero-width space
-            range.insertNode(span);
-            const rect = span.getBoundingClientRect();
-            span.parentNode.removeChild(span);
+            // Get cursor position directly from range (better for wrapped text)
+            const rect = range.getBoundingClientRect();
 
             let left = rect.left;
             let top = rect.bottom + 5;
@@ -3519,6 +3971,7 @@ function showCommandModal() {
             // Adjust if modal would go off-screen
             const modalWidth = 350; // matches CSS
             const modalHeight = commandModal.offsetHeight || 200; // Use actual height or estimate
+
 
             if (left + modalWidth > window.innerWidth) {
                 left = window.innerWidth - modalWidth - 10;
@@ -3541,12 +3994,17 @@ function showCommandModal() {
                 top = Math.max(10, viewportHeight - modalHeight - 20);
             }
 
+
             commandModal.style.left = `${left}px`;
             commandModal.style.top = `${top}px`;
         }
 
-        // Focus search input
+        // Make modal visible now that it's positioned
+        commandModal.style.opacity = "1";
+
+        // Focus search input and clear any selection
         commandSearch.focus();
+        commandSearch.setSelectionRange(0, 0);
     }, 0);
 }
 
@@ -3713,10 +4171,49 @@ function filterCommands(searchTerm) {
 // Event listeners
 // Detect slash command and keyboard shortcuts
 editor.addEventListener("keydown", (event) => {
-    console.log('KEYDOWN EVENT:', event.key);
 
-    // Prevent most keys in typewriter mode (must be first to override all other handlers)
-    if (typewriterMode) {
+    // Prevent cursor from moving into spacer divs in center mode
+    if (centerMode && (event.key === 'ArrowUp' || event.key === 'ArrowDown' || event.key === 'Home' || event.key === 'End')) {
+        const currentBlock = getCurrentBlock();
+        const allBlocks = Array.from(editor.querySelectorAll('.block'));
+
+        if (currentBlock && allBlocks.length > 0) {
+            const currentIndex = allBlocks.indexOf(currentBlock);
+
+            // Prevent moving up from first block
+            if ((event.key === 'ArrowUp' || event.key === 'Home') && currentIndex === 0) {
+                const selection = window.getSelection();
+                if (selection.rangeCount > 0) {
+                    const range = selection.getRangeAt(0);
+                    // Only prevent if cursor is at or near the start of the block
+                    if (range.startOffset === 0 || event.key === 'Home') {
+                        event.preventDefault();
+                        return;
+                    }
+                }
+            }
+
+            // Prevent moving down from last block
+            if ((event.key === 'ArrowDown' || event.key === 'End') && currentIndex === allBlocks.length - 1) {
+                const selection = window.getSelection();
+                if (selection.rangeCount > 0) {
+                    const range = selection.getRangeAt(0);
+                    const blockContent = currentBlock.querySelector('.block-content');
+                    if (blockContent) {
+                        const textLength = blockContent.textContent.length;
+                        // Only prevent if cursor is at or near the end of the block
+                        if (range.startOffset >= textLength || event.key === 'End') {
+                            event.preventDefault();
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Prevent most keys in forward-only mode (must be first to override all other handlers)
+    if (forwardOnlyMode) {
         // Prevent backspace and delete
         if (event.key === 'Backspace' || event.key === 'Delete') {
             event.preventDefault();
@@ -4199,8 +4696,8 @@ editor.addEventListener("keydown", (event) => {
         return;
     }
 
-    // Prevent text selection shortcuts in typewriter mode
-    if (typewriterMode) {
+    // Prevent text selection shortcuts in forward-only mode
+    if (forwardOnlyMode) {
         // Prevent Ctrl/Cmd+A (select all)
         if ((event.ctrlKey || event.metaKey) && event.key === 'a') {
             event.preventDefault();
@@ -4312,6 +4809,8 @@ editor.addEventListener("keydown", (event) => {
     // Handle slash to open command modal (but not if intro modal or deleted doc modal is open)
     if (event.key === "/" && !commandModalOpen && introModal.classList.contains("hidden") && deletedDocModal.classList.contains("hidden")) {
         event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
 
         // Check if multiple blocks are selected
         const selectedBlocks = getSelectedBlocks();
@@ -4501,10 +5000,17 @@ if (localStorage.getItem("canvasMode") === "true") {
     document.body.classList.add("canvas-mode");
 }
 
-// Load typewriter mode preference on page load
-if (localStorage.getItem("typewriterMode") === "true") {
-    typewriterMode = true;
-    document.body.classList.add("typewriter-mode");
+// Load forward-only mode preference on page load
+if (localStorage.getItem("forwardOnlyMode") === "true") {
+    forwardOnlyMode = true;
+    document.body.classList.add("forward-only-mode");
+}
+
+// Load center mode preference on page load
+if (localStorage.getItem("centerMode") === "true") {
+    centerMode = true;
+    document.body.classList.add("center-mode");
+    addCenterModeSpacers();
 }
 
 // Load focus mode preference on page load
@@ -4513,16 +5019,31 @@ if (localStorage.getItem("focusMode") === "true") {
     document.body.classList.add("focus-mode");
 }
 
-// Prevent text selection with mouse in typewriter mode
+// Load ephemeral word limit preference on page load
+const savedLimit = localStorage.getItem("ephemeralWordLimit");
+if (savedLimit) {
+    const parsedLimit = parseInt(savedLimit, 10);
+    if (!isNaN(parsedLimit) && parsedLimit > 0) {
+        EPHEMERAL_WORD_LIMIT = parsedLimit;
+    }
+}
+
+// Load word count visibility preference on page load
+if (localStorage.getItem("wordCountVisible") === "true") {
+    wordCountVisible = true;
+    wordCountDisplay.classList.remove("hidden");
+}
+
+// Prevent text selection with mouse in forward-only mode
 editor.addEventListener("selectstart", (event) => {
-    if (typewriterMode) {
+    if (forwardOnlyMode) {
         event.preventDefault();
     }
 });
 
-// Prevent context menu in typewriter mode
+// Prevent context menu in forward-only mode
 editor.addEventListener("contextmenu", (event) => {
-    if (typewriterMode) {
+    if (forwardOnlyMode) {
         event.preventDefault();
     }
 });
@@ -4530,9 +5051,7 @@ editor.addEventListener("contextmenu", (event) => {
 // Handle fullscreen changes
 document.addEventListener("fullscreenchange", () => {
     if (document.fullscreenElement) {
-        console.log("Entered fullscreen mode");
     } else {
-        console.log("Exited fullscreen mode");
     }
 });
 
@@ -4739,6 +5258,12 @@ editor.addEventListener("input", (event) => {
     }
     autoSave(); // Auto-save content
     updateFocusParagraph();
+
+    // Center current block immediately during typing (instant to prevent drift)
+    centerCurrentBlock(true);
+
+    // Enforce ephemeral word limit
+    enforceEphemeralLimit();
 });
 
 // Handle copy event to create proper HTML lists
@@ -4886,12 +5411,18 @@ editor.addEventListener("paste", (event) => {
             focusBlock(blocks[blocks.length - 1], true);
         }
     }
+
+    // Center current block immediately during typing (instant to prevent drift)
+    centerCurrentBlock(true);
+
+    // Enforce ephemeral word limit
+    enforceEphemeralLimit();
 });
 
 // Handle clicks on editor - create first block if empty
 editor.addEventListener("click", (event) => {
-    // Prevent cursor movement in typewriter mode
-    if (typewriterMode) {
+    // Prevent cursor movement in forward-only mode
+    if (forwardOnlyMode) {
         event.preventDefault();
         return;
     }
@@ -4907,9 +5438,9 @@ editor.addEventListener("click", (event) => {
     centerCurrentBlock();
 });
 
-// Prevent mousedown in typewriter mode to block cursor positioning
+// Prevent mousedown in forward-only mode to block cursor positioning
 editor.addEventListener("mousedown", (event) => {
-    if (typewriterMode) {
+    if (forwardOnlyMode) {
         event.preventDefault();
         return;
     }
@@ -4917,11 +5448,43 @@ editor.addEventListener("mousedown", (event) => {
 
 editor.addEventListener("keyup", () => {
     updateFocusParagraph();
-    centerCurrentBlock();
+    centerCurrentBlock(true);
 });
 
 // Update word count when selection changes (for selected text counting)
 document.addEventListener("selectionchange", () => {
+    // Prevent cursor from being in spacer divs (center mode)
+    if (centerMode) {
+        const selection = window.getSelection();
+        if (selection.rangeCount > 0) {
+            const range = selection.getRangeAt(0);
+            let node = range.startContainer;
+
+            // Walk up the DOM tree to find if we're in a spacer
+            let currentNode = node;
+            while (currentNode && currentNode !== editor) {
+                if (currentNode.id === 'center-mode-top-spacer' || currentNode.id === 'center-mode-bottom-spacer') {
+                    // We're in a spacer - move cursor to nearest content block
+                    const allBlocks = Array.from(editor.querySelectorAll('.block'));
+                    if (allBlocks.length > 0) {
+                        const targetBlock = currentNode.id === 'center-mode-top-spacer' ? allBlocks[0] : allBlocks[allBlocks.length - 1];
+                        const blockContent = targetBlock.querySelector('.block-content');
+                        if (blockContent) {
+                            const newRange = document.createRange();
+                            const textNode = blockContent.firstChild || blockContent;
+                            newRange.setStart(textNode, currentNode.id === 'center-mode-top-spacer' ? 0 : textNode.textContent?.length || 0);
+                            newRange.collapse(true);
+                            selection.removeAllRanges();
+                            selection.addRange(newRange);
+                        }
+                    }
+                    break;
+                }
+                currentNode = currentNode.parentNode;
+            }
+        }
+    }
+
     if (wordCountVisible) {
         updateWordCount();
     }
@@ -4948,7 +5511,6 @@ function migrateDocumentsWithIds() {
 
     if (migrated) {
         setSavedDocuments(docs);
-        console.log("Migrated existing documents to include IDs");
     }
 }
 
@@ -4995,7 +5557,13 @@ if (docIdFromURL) {
                     // Update page title
                     updatePageTitle(savedFile.fileName);
 
-                    console.log(`Restored file "${savedFile.fileName}" from previous session`);
+
+                    // Center the first block if center mode is active (double RAF ensures layout is complete)
+                    if (centerMode) {
+                        requestAnimationFrame(() => {
+                            requestAnimationFrame(() => centerCurrentBlock(true));
+                        });
+                    }
                 } else {
                     // Request permission
                     const newPermission = await savedFile.handle.requestPermission({ mode: 'readwrite' });
@@ -5022,11 +5590,16 @@ if (docIdFromURL) {
                         // Update page title
                         updatePageTitle(savedFile.fileName);
 
-                        console.log(`Restored file "${savedFile.fileName}" after re-requesting permission`);
+
+                        // Center the first block if center mode is active (double RAF ensures layout is complete)
+                        if (centerMode) {
+                            requestAnimationFrame(() => {
+                                requestAnimationFrame(() => centerCurrentBlock(true));
+                            });
+                        }
                     } else {
                         // Permission denied, clear the saved handle
                         await clearFileHandleFromDB();
-                        console.log('Permission denied to restore previous file');
                     }
                 }
             } catch (error) {
@@ -5049,7 +5622,6 @@ if (!localStorage.getItem("hasSeenIntro")) {
 // Fallback: ensure at least one block exists after loading
 setTimeout(() => {
     if (editor.children.length === 0 || !editor.querySelector('.block')) {
-        console.log("No blocks found after load - creating initial block");
         const firstBlock = createBlockElement('text', '');
         editor.appendChild(firstBlock);
         focusBlock(firstBlock);
