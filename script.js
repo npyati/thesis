@@ -5772,8 +5772,31 @@ editor.addEventListener("keyup", () => {
 document.addEventListener("selectionchange", () => {
     // Prevent cursor from escaping blocks in center mode
     if (centerMode) {
+        // Don't interfere if any modal is open
+        if (!commandModal.classList.contains("hidden") ||
+            !saveModal.classList.contains("hidden") ||
+            !loadModal.classList.contains("hidden") ||
+            !deleteModal.classList.contains("hidden") ||
+            !fontModal.classList.contains("hidden") ||
+            !headingModal.classList.contains("hidden") ||
+            !introModal.classList.contains("hidden") ||
+            !dialogModal.classList.contains("hidden") ||
+            !deletedDocModal.classList.contains("hidden")) {
+            return;
+        }
+
         const selection = window.getSelection();
         if (selection.rangeCount > 0) {
+            // Don't interfere if user has an active selection (not collapsed)
+            if (!selection.isCollapsed) {
+                return;
+            }
+
+            // Don't interfere if focus is not in the editor
+            if (document.activeElement !== editor && !editor.contains(document.activeElement)) {
+                return;
+            }
+
             const range = selection.getRangeAt(0);
             let node = range.startContainer;
 
@@ -5782,7 +5805,7 @@ document.addEventListener("selectionchange", () => {
             let inTopSpacer = false;
             let currentNode = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
 
-            while (currentNode && currentNode !== document.body) {
+            while (currentNode && currentNode !== editor) {
                 if (currentNode.classList && currentNode.classList.contains('block-content')) {
                     insideBlock = true;
                     break;
