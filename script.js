@@ -222,6 +222,7 @@ let currentDocumentIsEphemeral = false; // Track if current document is ephemera
 let filteredCommandsList = []; // Store the currently filtered commands for keyboard navigation
 let currentFileHandle = null; // Track the current file handle for direct file editing
 let currentFileName = null; // Track the current file name
+let deferredInstallPrompt = null; // Store the PWA install prompt for later use
 const DB_NAME = 'thesis-db';
 const DB_VERSION = 1;
 const STORE_NAME = 'file-handles';
@@ -658,6 +659,11 @@ const commands = [
         name: "Clear Storage",
         description: "Clear auto-save from browser memory",
         action: clearStorage
+    },
+    {
+        name: "Install App",
+        description: "Install thesis as a standalone app (no browser chrome)",
+        action: installApp
     }
 ];
 
@@ -1347,6 +1353,22 @@ function toggleFullscreen() {
         if (document.exitFullscreen) {
             document.exitFullscreen();
         }
+    }
+}
+
+// Function to install the app as a PWA
+async function installApp() {
+    if (deferredInstallPrompt) {
+        // Show the browser's install prompt
+        deferredInstallPrompt.prompt();
+        const { outcome } = await deferredInstallPrompt.userChoice;
+        if (outcome === 'accepted') {
+            deferredInstallPrompt = null;
+        }
+    } else if (window.matchMedia('(display-mode: standalone)').matches) {
+        await showAlert('thesis is already installed as an app.');
+    } else {
+        await showAlert('To install thesis as an app, use your browser\'s "Install" or "Add to Home Screen" option.');
     }
 }
 
@@ -6576,4 +6598,17 @@ document.addEventListener("keydown", (event) => {
             editor.focus();
         }
     }
+});
+
+// PWA: Register service worker
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./sw.js')
+        .then(() => console.log('Service worker registered'))
+        .catch((err) => console.log('Service worker registration failed:', err));
+}
+
+// PWA: Capture install prompt for later use
+window.addEventListener('beforeinstallprompt', (event) => {
+    event.preventDefault();
+    deferredInstallPrompt = event;
 });
