@@ -60,6 +60,14 @@
             </div>
         </div>
     </div>
+    <div id="retype-bar" class="hidden" role="complementary" aria-label="Source paragraph to retype">
+        <div id="retype-text"></div>
+        <div id="retype-meta">
+            <span id="retype-counter"></span>
+            <span class="retype-hint">⌘↓ next · ⌘↑ back · ⌘. finish</span>
+        </div>
+    </div>
+    <div id="blind-overlay" class="hidden" aria-hidden="true"><span id="blind-char"></span></div>
     <div id="find-bar" class="hidden" role="search" aria-label="Find in document">
         <input type="text" id="find-input" placeholder="Find..." autocomplete="off" aria-label="Find text">
         <span id="find-count" aria-live="polite"></span>

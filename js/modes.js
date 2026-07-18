@@ -15,6 +15,34 @@ export function toggleForwardOnlyMode() {
 }
 
 // ──────────────────────────────────
+// Blind mode — type without seeing the words; only the last character shows.
+// Deliberately not persisted: reopening the app to an invisible document
+// would read as data loss.
+// ──────────────────────────────────
+export function toggleBlindMode() {
+    state.blindMode = !state.blindMode;
+    document.body.classList.toggle('blind-mode', state.blindMode);
+    const overlay = document.getElementById('blind-overlay');
+    if (state.blindMode) {
+        overlay.classList.remove('hidden');
+        setBlindChar('');
+    } else {
+        overlay.classList.add('hidden');
+        const blocks = getEditor().querySelectorAll('.block');
+        if (blocks.length) focusBlock(blocks[blocks.length - 1], true);
+    }
+}
+
+export function setBlindChar(ch) {
+    const el = document.getElementById('blind-char');
+    if (!el) return;
+    el.textContent = ch === ' ' ? '·' : ch;
+    el.classList.remove('pulse');
+    void el.offsetWidth;
+    el.classList.add('pulse');
+}
+
+// ──────────────────────────────────
 // Spellcheck
 // ──────────────────────────────────
 export function applySpellcheck(enabled) {

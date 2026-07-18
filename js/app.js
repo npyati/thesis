@@ -10,8 +10,9 @@ import {
     togglePageStyle, toggleFullscreen, addCenterModeSpacers,
     centerCurrentBlock, updateFocusParagraph, debouncedUpdateFocusParagraph,
     createNewEphemeralDocument, enforceEphemeralLimit,
-    applyStage, toggleSpellcheck,
+    applyStage, toggleSpellcheck, toggleBlindMode, setBlindChar,
 } from './modes.js';
+import { startRetype, retypeNext, retypePrev, endRetype, resumeRetypeIfActive } from './retype.js';
 import {
     loadContent, autoSave, saveToNewFile,
     importFromMarkdown, exportAsMarkdown, exportAsWord,
@@ -272,12 +273,12 @@ function afterHistoryRestore() {
 }
 
 function doUndo() {
-    if (state.forwardOnlyMode) return;
+    if (state.forwardOnlyMode || state.blindMode) return;
     if (historyUndo()) afterHistoryRestore();
 }
 
 function doRedo() {
-    if (state.forwardOnlyMode) return;
+    if (state.forwardOnlyMode || state.blindMode) return;
     if (historyRedo()) afterHistoryRestore();
 }
 
@@ -477,6 +478,9 @@ const commands = [
     { name: 'Open Recent', description: 'Reopen a recently used file', action: openRecentModal },
     { name: 'New Ephemeral Document', description: 'Write in pure flow - oldest words fade away as new thoughts emerge', action: () => { createNewEphemeralDocument(autoSave); setSaveStatus('hidden'); } },
     { name: 'Change Ephemeral Word Limit', description: 'Set how many words linger before fading into the past', action: changeEphemeralWordLimit },
+    { name: 'Retype Document', description: 'Redraft by retyping — the old draft shows a paragraph at a time while you type it fresh', action: () => startRetype(showAlert) },
+    { name: 'End Retype', description: 'Finish retyping and keep the new draft', action: endRetype },
+    { name: 'Toggle Blind Mode', description: 'Write without seeing the words — only the last letter shows', action: toggleBlindMode },
     { name: 'Draft Stage', description: 'Forward-only, focus mode, no spellcheck — just get words out', action: () => applyStage('draft') },
     { name: 'Revise Stage', description: 'Unlock editing and see the whole document', action: () => applyStage('revise') },
     { name: 'Polish Stage', description: 'Spellcheck on for the final pass', action: () => applyStage('polish') },
@@ -624,6 +628,8 @@ function showCommandModal() {
     // Mode status badges
     const modes = [];
     if (state.currentStage) modes.push(`Stage: ${state.currentStage.charAt(0).toUpperCase()}${state.currentStage.slice(1)}`);
+    if (state.retypeActive) modes.push('Retype');
+    if (state.blindMode) modes.push('Blind');
     if (state.focusMode) modes.push('Focus');
     if (state.centerMode) modes.push('Center');
     if (state.forwardOnlyMode) modes.push('Forward-Only');
@@ -745,6 +751,13 @@ document.addEventListener('click', (event) => {
 // Editor keydown handler
 // ──────────────────────────────────
 editor.addEventListener('keydown', (event) => {
+    // Retype navigation (⌘↓ / ⌘↑ / ⌘.)
+    if (state.retypeActive && (event.metaKey || event.ctrlKey)) {
+        if (event.key === 'ArrowDown') { event.preventDefault(); retypeNext(); return; }
+        if (event.key === 'ArrowUp') { event.preventDefault(); retypePrev(); return; }
+        if (event.key === '.') { event.preventDefault(); endRetype(); return; }
+    }
+
     // Center mode: prevent cursor from entering spacers
     if (state.centerMode && (event.key === 'ArrowUp' || event.key === 'ArrowDown' || event.key === 'Home' || event.key === 'End')) {
         const currentBlock = getCurrentBlock();
@@ -807,8 +820,8 @@ editor.addEventListener('keydown', (event) => {
         }
     }
 
-    // Forward-only mode blocks
-    if (state.forwardOnlyMode) {
+    // Forward-only mode blocks (blind mode enforces the same: no unseen edits)
+    if (state.forwardOnlyMode || state.blindMode) {
         if (['Backspace', 'Delete'].includes(event.key)) { event.preventDefault(); return; }
         if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown', 'Tab'].includes(event.key)) { event.preventDefault(); return; }
         if ((event.ctrlKey || event.metaKey) && event.key === 'a') { event.preventDefault(); return; }
@@ -821,6 +834,7 @@ editor.addEventListener('keydown', (event) => {
         const cb = getCurrentBlock(); if (!cb) return;
         const ce = cb.querySelector('.block-content'); if (!ce) return;
         recordCheckpoint();
+        if (state.blindMode) setBlindChar('¶');
         const tc = ce.textContent || '';
         const type = cb.dataset.type;
 
@@ -1137,6 +1151,7 @@ editor.addEventListener('beforeinput', (event) => {
 // Editor input handler
 editor.addEventListener('input', (event) => {
     scheduleCheckpoint();
+    if (state.blindMode && event.data) setBlindChar(event.data);
     if (!document.getElementById('find-bar').classList.contains('hidden')) closeFindBar(false);
 
     // Strikethrough trigger (xxxx)
@@ -1298,16 +1313,16 @@ editor.addEventListener('paste', (event) => {
 
 // Click / mouse handlers
 editor.addEventListener('click', (event) => {
-    if (state.forwardOnlyMode) { event.preventDefault(); return; }
+    if (state.forwardOnlyMode || state.blindMode) { event.preventDefault(); return; }
     if (editor.querySelectorAll('.block').length === 0) {
         const fb = createBlockElement('text', ''); editor.appendChild(fb); focusBlock(fb);
     }
     updateFocusParagraph(); centerCurrentBlock();
 });
-editor.addEventListener('mousedown', (event) => { if (state.forwardOnlyMode) { event.preventDefault(); return; } });
+editor.addEventListener('mousedown', (event) => { if (state.forwardOnlyMode || state.blindMode) { event.preventDefault(); return; } });
 editor.addEventListener('keyup', () => { updateFocusParagraph(); centerCurrentBlock(true); });
-editor.addEventListener('selectstart', (event) => { if (state.forwardOnlyMode) event.preventDefault(); });
-editor.addEventListener('contextmenu', (event) => { if (state.forwardOnlyMode) event.preventDefault(); });
+editor.addEventListener('selectstart', (event) => { if (state.forwardOnlyMode || state.blindMode) event.preventDefault(); });
+editor.addEventListener('contextmenu', (event) => { if (state.forwardOnlyMode || state.blindMode) event.preventDefault(); });
 
 // Selection change
 document.addEventListener('selectionchange', () => {
@@ -1502,7 +1517,10 @@ state.currentStage = localStorage.getItem('writingStage');
 // Load autosaved content, then re-attach the synced file (if any)
 loadContent();
 resetHistory();
-setTimeout(() => restoreFileHandle(), 50);
+resumeRetypeIfActive();
+// A reload mid-retype must not reconnect the old file — the fresh draft
+// would overwrite it on autosave
+if (!state.retypeActive) setTimeout(() => restoreFileHandle(), 50);
 
 // Show intro on first visit
 if (!localStorage.getItem('hasSeenIntro')) {

@@ -14,6 +14,8 @@ const state = {
     forwardOnlyMode: false,
     centerMode: false,
     focusMode: false,
+    blindMode: false,
+    retypeActive: false,
     EPHEMERAL_WORD_LIMIT: 100,
     multiBlockSelection: [],
     currentDocumentIsEphemeral: false,
