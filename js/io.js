@@ -2,10 +2,11 @@
 
 import state from './state.js';
 import { getEditor, createBlockElement, updateNumberedBlocks, focusBlock } from './blocks.js';
-import { saveFileHandleToDB, loadFileHandleFromDB, clearFileHandleFromDB } from './db.js';
+import { saveFileHandleToDB, loadFileHandleFromDB, clearFileHandleFromDB, addRecentFile, removeRecentFile } from './db.js';
 import { generateTimestampedFilename } from './utils.js';
 import { sanitizeHTML } from './sanitize.js';
-import { showConfirm } from './modals.js';
+import { showAlert, showConfirm } from './modals.js';
+import { resetHistory } from './history.js';
 import {
     updatePageTitle, clearPageTitle,
     addCenterModeSpacers, centerCurrentBlock,
@@ -122,15 +123,30 @@ export function loadContent() {
 }
 
 // ──────────────────────────────────
+// Save-state indicator
+// ──────────────────────────────────
+export function setSaveStatus(status) { // 'synced' | 'saving' | 'detached' | 'hidden'
+    const el = document.getElementById('save-status');
+    if (!el) return;
+    el.className = status === 'hidden' ? 'hidden' : status;
+    el.title = status === 'synced' ? `Saved to ${state.currentFileName}`
+        : status === 'saving' ? 'Saving…'
+        : status === 'detached' ? 'File connection lost — use Save to reattach'
+        : '';
+}
+
+// ──────────────────────────────────
 // File operations
 // ──────────────────────────────────
 export async function saveToFile() {
     if (!state.currentFileHandle) return false;
     try {
+        setSaveStatus('saving');
         const markdown = blocksToMarkdown();
         const writable = await state.currentFileHandle.createWritable();
         await writable.write(markdown);
         await writable.close();
+        setSaveStatus('synced');
         return true;
     } catch (error) {
         console.error('Error saving to file:', error);
@@ -138,6 +154,8 @@ export async function saveToFile() {
             state.currentFileHandle = null;
             state.currentFileName = null;
             clearPageTitle();
+            setSaveStatus('detached');
+            showAlert('The connection to your file was lost (permission revoked). Your draft is still autosaved in the browser — use Save to reattach it to a file.');
         }
         return false;
     }
@@ -168,7 +186,9 @@ export async function saveToNewFile() {
             state.currentFileHandle = fileHandle;
             state.currentFileName = file.name;
             await saveFileHandleToDB(fileHandle, file.name);
+            await addRecentFile(fileHandle, file.name);
             updatePageTitle(file.name);
+            setSaveStatus('synced');
             markSavedPermanent();
         } else {
             exportAsMarkdown();
@@ -200,7 +220,10 @@ async function loadFileIntoEditor(fileHandle, fileName = null) {
     state.currentFileName = fileName || file.name;
     state.currentDocumentIsEphemeral = false;
     updatePageTitle(state.currentFileName);
+    setSaveStatus('synced');
     saveContent();
+    await addRecentFile(fileHandle, state.currentFileName);
+    resetHistory();
 
     const firstBlock = editor.querySelector('.block');
     if (firstBlock) focusBlock(firstBlock);
@@ -240,6 +263,7 @@ export async function clearAll() {
         state.currentFileName = null;
         await clearFileHandleFromDB();
         clearPageTitle();
+        setSaveStatus('hidden');
 
         const firstBlock = createBlockElement('text', '');
         editor.appendChild(firstBlock);
@@ -281,6 +305,24 @@ export async function restoreFileHandle() {
         }
     } catch (error) {
         console.error('Error restoring file:', error);
+    }
+}
+
+// Open a file from the recent list (called from a click/keypress, so
+// requestPermission has the user gesture it needs)
+export async function openRecentFile(entry) {
+    try {
+        let permission = await entry.handle.queryPermission({ mode: 'readwrite' });
+        if (permission !== 'granted') {
+            permission = await entry.handle.requestPermission({ mode: 'readwrite' });
+        }
+        if (permission !== 'granted') return;
+        await loadFileIntoEditor(entry.handle, entry.fileName);
+        await saveFileHandleToDB(entry.handle, entry.fileName);
+    } catch (error) {
+        console.error('Error opening recent file:', error);
+        await removeRecentFile(entry.handle);
+        await showAlert(`Couldn't open "${entry.fileName}" — it may have been moved or deleted.`);
     }
 }
 

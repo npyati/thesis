@@ -55,3 +55,67 @@ export async function clearFileHandleFromDB() {
         console.error('Error clearing file handle:', error);
     }
 }
+
+// ──────────────────────────────────
+// Recent files — a short list of {handle, fileName, timestamp}
+// ──────────────────────────────────
+const RECENT_KEY = 'recentFiles';
+const MAX_RECENT = 8;
+
+function getFromStore(key) {
+    return initDB().then(db => new Promise((resolve, reject) => {
+        const request = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).get(key);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+    }));
+}
+
+function putInStore(value, key) {
+    return initDB().then(db => new Promise((resolve, reject) => {
+        const transaction = db.transaction(STORE_NAME, 'readwrite');
+        transaction.objectStore(STORE_NAME).put(value, key);
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+    }));
+}
+
+export async function getRecentFiles() {
+    try {
+        return (await getFromStore(RECENT_KEY)) || [];
+    } catch (error) {
+        console.error('Error reading recent files:', error);
+        return [];
+    }
+}
+
+export async function addRecentFile(handle, fileName) {
+    try {
+        const list = await getRecentFiles();
+        // isSameEntry is async, so dedup outside the transaction
+        const kept = [];
+        for (const entry of list) {
+            try {
+                if (entry.handle && !(await handle.isSameEntry(entry.handle))) kept.push(entry);
+            } catch (e) { /* drop broken entries */ }
+        }
+        kept.unshift({ handle, fileName, timestamp: Date.now() });
+        await putInStore(kept.slice(0, MAX_RECENT), RECENT_KEY);
+    } catch (error) {
+        console.error('Error saving recent file:', error);
+    }
+}
+
+export async function removeRecentFile(handle) {
+    try {
+        const list = await getRecentFiles();
+        const kept = [];
+        for (const entry of list) {
+            try {
+                if (entry.handle && !(await handle.isSameEntry(entry.handle))) kept.push(entry);
+            } catch (e) { /* drop broken entries */ }
+        }
+        await putInStore(kept, RECENT_KEY);
+    } catch (error) {
+        console.error('Error removing recent file:', error);
+    }
+}

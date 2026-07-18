@@ -6,14 +6,25 @@
 - [x] Fix cursor disappearing in center mode — uses retry approach with requestAnimationFrame
 
 ## Medium Priority
-- [ ] Redesign ephemeral word fading to use time-based approach - words should start fading when written and vanish after ~1 minute
 - [x] Fix cursor restoration after word limit modal — no longer shadows global savedSelection
 - [x] If last thing I was working on when I closed the app was a file on disk, keep that as the save location when I reopen the app — file handle now survives restarts (permission is requested on the first click/keystroke instead of failing silently at load)
 
-## Feature Ideas
-- [ ] Add writing stage indicator system - color coding or visual indicator for different writing phases (outlining, drafting, fleshing out, editing, polishing, final pass) to help maintain focus on current stage
+## Feature Ideas (backlog)
+- [ ] Session word delta — show words written this session ("+412") next to the word count. No timers, no pace tracking; just the count.
+- [ ] Retype mode — show the previous draft dimmed/read-only while retyping it fresh (typewriter-era revision technique). Exploring the concept first.
+
+## Design principles (decided)
+- No timing elements anywhere — clocks and countdowns create stress; word-count-based mechanics only (this is why ephemeral mode uses a word limit, and why time-based fading was rejected)
+- Ephemeral means no record — no compost/recovery files for faded words; the point is writing without a trace
 
 ## Recently Completed
+- [x] Stage presets: Draft (forward-only, focus, no spellcheck), Revise (unlocked), Polish (spellcheck on) — manual mode toggles clear the stage label
+- [x] Reliable undo/redo (Cmd+Z / Cmd+Shift+Z) — snapshot-based, covers block operations native undo couldn't; blocked in forward-only mode
+- [x] Find (Cmd+F) — highlights via CSS Custom Highlight API, Enter/arrows to step through matches
+- [x] Open Recent — last 8 file handles stored in IndexedDB, reopen from the palette
+- [x] Save-state indicator dot (synced / saving / detached) + alert when the file connection is lost
+- [x] Print / save as PDF with a print stylesheet
+- [x] Toggle Spellcheck command; pasted plain-text markdown converts to blocks
 - [x] Files are now the permanent home for documents: removed the in-browser document library (save/load/delete modals, doc IDs, URL routing); localStorage keeps only the autosaved working draft
 - [x] Inline formatting (bold/italic/strikethrough) now survives file save/load, Enter splits, Backspace merges, and copy — markdown conversion is lossless both directions
 - [x] Markdown loaded from files is HTML-escaped (a crafted .md file could previously inject markup into the editor)

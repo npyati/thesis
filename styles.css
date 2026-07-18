@@ -452,6 +452,198 @@ body.typewriter-mode #editor {
     -ms-user-select: none;
 }
 
+/* Find bar */
+#find-bar {
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    padding: 6px 10px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    z-index: 1000;
+}
+
+#find-bar.hidden {
+    display: none;
+}
+
+#find-input {
+    border: none;
+    outline: none;
+    font-size: 14px;
+    width: 180px;
+    background: transparent;
+    color: inherit;
+}
+
+#find-count {
+    font-size: 12px;
+    color: #999;
+    min-width: 34px;
+    text-align: right;
+}
+
+body.dark-mode #find-bar {
+    background: #2d2d2d;
+    border-color: #555;
+    color: #e0e0e0;
+}
+
+::highlight(find-match) {
+    background-color: rgba(255, 213, 79, 0.5);
+}
+
+::highlight(find-current) {
+    background-color: rgba(255, 152, 0, 0.75);
+}
+
+body.dark-mode ::highlight(find-match) {
+    background-color: rgba(255, 213, 79, 0.3);
+}
+
+body.dark-mode ::highlight(find-current) {
+    background-color: rgba(255, 152, 0, 0.55);
+}
+
+/* Recent files list */
+.file-list {
+    max-height: 300px;
+    overflow-y: auto;
+    margin-bottom: 16px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+.file-item {
+    padding: 12px 16px;
+    cursor: pointer;
+    border-bottom: 1px solid #f0f0f0;
+    transition: background-color 0.15s ease;
+}
+
+.file-item:last-child {
+    border-bottom: none;
+}
+
+.file-item:hover {
+    background-color: #f5f5f5;
+}
+
+.file-item.selected {
+    background-color: #e8f4fd;
+}
+
+.file-item-name {
+    font-weight: 600;
+    font-size: 14px;
+    margin-bottom: 2px;
+}
+
+.file-item-date {
+    font-size: 12px;
+    color: #666;
+}
+
+.no-files {
+    padding: 20px;
+    text-align: center;
+    color: #999;
+}
+
+body.dark-mode .file-list {
+    border-color: #555;
+}
+
+body.dark-mode .file-item {
+    border-bottom-color: #444;
+}
+
+body.dark-mode .file-item:hover {
+    background-color: #3d3d3d;
+}
+
+body.dark-mode .file-item.selected {
+    background-color: #4d4d4d;
+}
+
+body.dark-mode .file-item-date {
+    color: #999;
+}
+
+/* Save-state indicator */
+#save-status {
+    position: fixed;
+    bottom: 14px;
+    left: 14px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    opacity: 0.8;
+    z-index: 900;
+}
+
+#save-status.hidden {
+    display: none;
+}
+
+#save-status.synced {
+    background: #8fbc8f;
+}
+
+#save-status.saving {
+    background: #d4a94e;
+    animation: save-pulse 1s ease-in-out infinite;
+}
+
+#save-status.detached {
+    background: #d9534f;
+}
+
+@keyframes save-pulse {
+    50% { opacity: 0.3; }
+}
+
+/* Print */
+@media print {
+    body, body.dark-mode {
+        display: block;
+        height: auto;
+        overflow: visible;
+        background: #fff !important;
+        color: #000 !important;
+    }
+
+    #editor, body.dark-mode #editor {
+        width: 100%;
+        max-width: none;
+        height: auto;
+        overflow: visible;
+        box-shadow: none;
+        padding: 0;
+        background: #fff !important;
+        color: #000 !important;
+    }
+
+    #command-modal,
+    #word-count-display,
+    #find-bar,
+    #save-status,
+    .modal-overlay,
+    [data-spacer] {
+        display: none !important;
+    }
+
+    /* Undo focus-mode fading on paper */
+    .block {
+        opacity: 1 !important;
+    }
+}
+
 /* Focus mode - fade non-active blocks */
 body.focus-mode #editor .block {
     opacity: 0.3;
@@ -497,7 +689,8 @@ body.focus-mode #editor .block.focus-active {
 }
 
 #font-search,
-#heading-search {
+#heading-search,
+#recent-search {
     width: 100%;
     padding: 14px 16px;
     border: 1px solid #ddd;
@@ -510,7 +703,8 @@ body.focus-mode #editor .block.focus-active {
 }
 
 #font-search:focus,
-#heading-search:focus {
+#heading-search:focus,
+#recent-search:focus {
     border-color: #4a90e2;
 }
 
@@ -556,6 +750,7 @@ body.dark-mode .modal-content h3 {
 
 body.dark-mode #font-search,
 body.dark-mode #heading-search,
+body.dark-mode #recent-search,
 body.dark-mode #ephemeral-limit-input {
     background: #3d3d3d;
     color: #e0e0e0;
