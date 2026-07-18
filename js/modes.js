@@ -11,6 +11,53 @@ export function toggleForwardOnlyMode() {
     state.forwardOnlyMode = !state.forwardOnlyMode;
     document.body.classList.toggle('forward-only-mode', state.forwardOnlyMode);
     localStorage.setItem('forwardOnlyMode', state.forwardOnlyMode);
+    clearStage();
+}
+
+// ──────────────────────────────────
+// Spellcheck
+// ──────────────────────────────────
+export function applySpellcheck(enabled) {
+    const editor = getEditor();
+    editor.spellcheck = enabled;
+    localStorage.setItem('spellcheck', enabled);
+    // Squiggles only refresh after a blur/focus cycle
+    if (document.activeElement === editor || editor.contains(document.activeElement)) {
+        editor.blur();
+        editor.focus();
+    }
+}
+
+export function toggleSpellcheck() {
+    applySpellcheck(!getEditor().spellcheck);
+    clearStage();
+}
+
+// ──────────────────────────────────
+// Stage presets — bundles of modes for phases of writing
+// ──────────────────────────────────
+const STAGES = {
+    draft:  { forwardOnly: true,  focus: true,  spellcheck: false },
+    revise: { forwardOnly: false, focus: false, spellcheck: false },
+    polish: { forwardOnly: false, focus: false, spellcheck: true },
+};
+
+// Manually toggling any stage-managed mode clears the stage label
+function clearStage() {
+    if (state.currentStage) {
+        state.currentStage = null;
+        localStorage.removeItem('writingStage');
+    }
+}
+
+export function applyStage(stageName) {
+    const stage = STAGES[stageName];
+    if (!stage) return;
+    if (state.forwardOnlyMode !== stage.forwardOnly) toggleForwardOnlyMode();
+    if (state.focusMode !== stage.focus) toggleFocusMode();
+    applySpellcheck(stage.spellcheck);
+    state.currentStage = stageName;
+    localStorage.setItem('writingStage', stageName);
 }
 
 // ──────────────────────────────────
@@ -88,6 +135,7 @@ export function toggleFocusMode() {
     state.focusMode = !state.focusMode;
     document.body.classList.toggle('focus-mode', state.focusMode);
     localStorage.setItem('focusMode', state.focusMode);
+    clearStage();
 
     if (state.focusMode) {
         updateFocusParagraph();

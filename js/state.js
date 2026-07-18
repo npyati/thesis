@@ -20,6 +20,8 @@ const state = {
     filteredCommandsList: [],
     currentFileHandle: null,
     currentFileName: null,
+    currentStage: null,
+    selectedRecentIndex: 0,
     deferredInstallPrompt: null,
     selectedCommandIndex: 0,
 };

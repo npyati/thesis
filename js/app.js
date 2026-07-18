@@ -10,13 +10,17 @@ import {
     togglePageStyle, toggleFullscreen, addCenterModeSpacers,
     centerCurrentBlock, updateFocusParagraph, debouncedUpdateFocusParagraph,
     createNewEphemeralDocument, enforceEphemeralLimit,
+    applyStage, toggleSpellcheck,
 } from './modes.js';
 import {
     loadContent, autoSave, saveToNewFile,
     importFromMarkdown, exportAsMarkdown, exportAsWord,
     copyAll, copyAsMarkdown, clearAll, clearStorage, quickSave,
-    markdownToBlocks, restoreFileHandle,
+    markdownToBlocks, restoreFileHandle, openRecentFile, setSaveStatus,
 } from './io.js';
+import { getRecentFiles } from './db.js';
+import { recordCheckpoint, scheduleCheckpoint, undo as historyUndo, redo as historyRedo, resetHistory } from './history.js';
+import * as find from './find.js';
 
 const editor = getEditor();
 
@@ -177,6 +181,107 @@ function openFontModal() {
 function closeFontModal() { closeModal(document.getElementById('font-modal')); }
 
 // ──────────────────────────────────
+// Recent files modal
+// ──────────────────────────────────
+let recentFilesCache = [];
+
+function filteredRecentFiles() {
+    const term = document.getElementById('recent-search').value.toLowerCase();
+    return recentFilesCache.filter(f => f.fileName.toLowerCase().includes(term));
+}
+
+function renderRecentList(files) {
+    const listEl = document.getElementById('recent-list');
+    listEl.innerHTML = '';
+    if (files.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'no-files';
+        empty.textContent = 'No matching files';
+        listEl.appendChild(empty);
+        return;
+    }
+    files.forEach((f, i) => {
+        const item = document.createElement('div');
+        item.className = `file-item ${i === state.selectedRecentIndex ? 'selected' : ''}`;
+        item.setAttribute('role', 'option');
+        const name = document.createElement('div');
+        name.className = 'file-item-name';
+        name.textContent = f.fileName;
+        const date = document.createElement('div');
+        date.className = 'file-item-date';
+        date.textContent = new Date(f.timestamp).toLocaleString();
+        item.appendChild(name);
+        item.appendChild(date);
+        item.addEventListener('click', () => pickRecentFile(f));
+        listEl.appendChild(item);
+    });
+}
+
+async function pickRecentFile(entry) {
+    closeModal(document.getElementById('recent-modal'));
+    await openRecentFile(entry);
+}
+
+async function openRecentModal() {
+    recentFilesCache = await getRecentFiles();
+    if (recentFilesCache.length === 0) {
+        await showAlert('No recent files yet — they appear here after you open or save a file.');
+        return;
+    }
+    state.selectedRecentIndex = 0;
+    const modal = document.getElementById('recent-modal');
+    const search = document.getElementById('recent-search');
+    search.value = '';
+    renderRecentList(recentFilesCache);
+    openModal(modal, search);
+}
+
+// ──────────────────────────────────
+// Find bar
+// ──────────────────────────────────
+function updateFindCount(result) {
+    const findCount = document.getElementById('find-count');
+    const findInput = document.getElementById('find-input');
+    findCount.textContent = result.total ? `${result.index + 1}/${result.total}` : (findInput.value ? '0' : '');
+}
+
+function openFindBar() {
+    const findBar = document.getElementById('find-bar');
+    const findInput = document.getElementById('find-input');
+    findBar.classList.remove('hidden');
+    findInput.value = '';
+    document.getElementById('find-count').textContent = '';
+    setTimeout(() => findInput.focus(), 0);
+}
+
+function closeFindBar(commit) {
+    find.close(commit);
+    document.getElementById('find-bar').classList.add('hidden');
+    editor.focus();
+}
+
+// ──────────────────────────────────
+// Undo / redo
+// ──────────────────────────────────
+function afterHistoryRestore() {
+    if (state.centerMode) addCenterModeSpacers();
+    updateNumberedBlocks();
+    autoSave();
+    updateFocusParagraph();
+    if (state.wordCountVisible) debouncedWordCount();
+}
+
+function doUndo() {
+    if (state.forwardOnlyMode) return;
+    if (historyUndo()) afterHistoryRestore();
+}
+
+function doRedo() {
+    if (state.forwardOnlyMode) return;
+    if (historyRedo()) afterHistoryRestore();
+}
+
+// ──────────────────────────────────
 // Ephemeral word limit change
 // ──────────────────────────────────
 async function changeEphemeralWordLimit() {
@@ -322,6 +427,7 @@ function convertToNormalText() {
 }
 
 function deleteBlocks() {
+    recordCheckpoint();
     let blocksToDelete;
     if (state.multiBlockSelection.length > 0) blocksToDelete = state.multiBlockSelection;
     else { const sel = getSelectedBlocks(); blocksToDelete = sel.length > 0 ? sel : [getCurrentBlock()]; }
@@ -368,8 +474,13 @@ function showIntro() {
 // ──────────────────────────────────
 const commands = [
     { name: 'Save', description: 'Save to the current file (or choose one)', action: quickSave },
-    { name: 'New Ephemeral Document', description: 'Write in pure flow - oldest words fade away as new thoughts emerge', action: () => createNewEphemeralDocument(autoSave) },
+    { name: 'Open Recent', description: 'Reopen a recently used file', action: openRecentModal },
+    { name: 'New Ephemeral Document', description: 'Write in pure flow - oldest words fade away as new thoughts emerge', action: () => { createNewEphemeralDocument(autoSave); setSaveStatus('hidden'); } },
     { name: 'Change Ephemeral Word Limit', description: 'Set how many words linger before fading into the past', action: changeEphemeralWordLimit },
+    { name: 'Draft Stage', description: 'Forward-only, focus mode, no spellcheck — just get words out', action: () => applyStage('draft') },
+    { name: 'Revise Stage', description: 'Unlock editing and see the whole document', action: () => applyStage('revise') },
+    { name: 'Polish Stage', description: 'Spellcheck on for the final pass', action: () => applyStage('polish') },
+    { name: 'Find', description: 'Find text in the document (Cmd+F)', action: openFindBar },
     { name: 'Jump to Heading', description: 'Navigate to a heading in the document', action: openHeadingModal },
     { name: 'Heading 1', description: 'Format current line(s) as large heading', action: () => applyHeading(1) },
     { name: 'Heading 2', description: 'Format current line(s) as medium heading', action: () => applyHeading(2) },
@@ -391,11 +502,13 @@ const commands = [
     { name: 'Toggle Page Style', description: 'Switch between page and canvas view', action: togglePageStyle },
     { name: 'Toggle Fullscreen', description: 'Enter/exit fullscreen mode (F11)', action: toggleFullscreen },
     { name: 'Toggle Dark Mode', description: 'Switch between light and dark theme', action: toggleDarkMode },
+    { name: 'Toggle Spellcheck', description: 'Show or hide spelling squiggles', action: toggleSpellcheck },
     { name: 'Toggle Word Count', description: 'Show/hide word and character count', action: showWordCountToggle },
     { name: 'New Document', description: 'Start a new document', action: clearAll },
     { name: 'Copy All', description: 'Copy all content to clipboard', action: copyAll },
     { name: 'Export as Word', description: 'Download content as Word (.docx) file', action: exportAsWord },
     { name: 'Export as Markdown', description: 'Download a copy as a .md file', action: exportAsMarkdown },
+    { name: 'Print', description: 'Print the document or save as PDF', action: () => window.print() },
     { name: 'Copy as Markdown', description: 'Copy content as Markdown to clipboard', action: copyAsMarkdown },
     { name: 'Open File', description: 'Open and auto-sync with a .md file on disk', action: importFromMarkdown },
     { name: 'Save to File As...', description: 'Save and auto-sync to a .md file on disk', action: saveToNewFile },
@@ -488,6 +601,7 @@ function executeCommand(command) {
     commandModal.classList.add('hidden');
     state.multiBlockSelection = [];
 
+    recordCheckpoint();
     command.action();
 
     try {
@@ -509,6 +623,7 @@ function showCommandModal() {
 
     // Mode status badges
     const modes = [];
+    if (state.currentStage) modes.push(`Stage: ${state.currentStage.charAt(0).toUpperCase()}${state.currentStage.slice(1)}`);
     if (state.focusMode) modes.push('Focus');
     if (state.centerMode) modes.push('Center');
     if (state.forwardOnlyMode) modes.push('Forward-Only');
@@ -705,6 +820,7 @@ editor.addEventListener('keydown', (event) => {
         event.preventDefault();
         const cb = getCurrentBlock(); if (!cb) return;
         const ce = cb.querySelector('.block-content'); if (!ce) return;
+        recordCheckpoint();
         const tc = ce.textContent || '';
         const type = cb.dataset.type;
 
@@ -760,6 +876,7 @@ editor.addEventListener('keydown', (event) => {
             const prev = cb.previousElementSibling;
             if (!prev || !prev.classList.contains('block')) return;
             const pce = prev.querySelector('.block-content'); if (!pce) return;
+            recordCheckpoint();
             if (pce.lastChild && pce.lastChild.nodeName === 'BR') pce.removeChild(pce.lastChild);
 
             // Move child nodes across so inline formatting survives the merge
@@ -799,6 +916,7 @@ editor.addEventListener('keydown', (event) => {
         const sel = getSelectedBlocks();
         const blocks = sel.length > 1 ? sel : [getCurrentBlock()];
         if (!blocks[0]) return;
+        recordCheckpoint();
         blocks.forEach(b => {
             const level = parseInt(b.dataset.level) || 0;
             b.dataset.level = event.shiftKey ? Math.max(0, level - 1) : level + 1;
@@ -837,6 +955,7 @@ editor.addEventListener('keydown', (event) => {
     // Alt+Arrow — move blocks
     if (event.altKey && !event.shiftKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
         event.preventDefault();
+        recordCheckpoint();
         let blocks;
         if (state.multiBlockSelection.length > 0) blocks = state.multiBlockSelection;
         else { const sel = getSelectedBlocks(); blocks = sel.length > 1 ? sel : [getCurrentBlock()]; }
@@ -861,12 +980,19 @@ editor.addEventListener('keydown', (event) => {
         return;
     }
 
+    // Cmd+Z / Cmd+Shift+Z — undo/redo (blocked in forward-only mode)
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'z') {
+        event.preventDefault();
+        if (event.shiftKey) doRedo(); else doUndo();
+        return;
+    }
+
     // Cmd+D — delete block
     if ((event.ctrlKey || event.metaKey) && event.key === 'd') { event.preventDefault(); deleteBlocks(); return; }
 
     // Cmd+B / Cmd+I — formatting
-    if ((event.ctrlKey || event.metaKey) && event.key === 'b') { event.preventDefault(); applyFormatting('bold'); return; }
-    if ((event.ctrlKey || event.metaKey) && event.key === 'i') { event.preventDefault(); applyFormatting('italic'); return; }
+    if ((event.ctrlKey || event.metaKey) && event.key === 'b') { event.preventDefault(); recordCheckpoint(); applyFormatting('bold'); return; }
+    if ((event.ctrlKey || event.metaKey) && event.key === 'i') { event.preventDefault(); recordCheckpoint(); applyFormatting('italic'); return; }
 
     // Font size shortcuts
     if ((event.ctrlKey || event.metaKey) && (event.key === '=' || event.key === '+')) { event.preventDefault(); increaseFontSize(); return; }
@@ -876,6 +1002,9 @@ editor.addEventListener('keydown', (event) => {
 
     // Cmd+S — save
     if ((event.metaKey || event.ctrlKey) && event.key === 's') { event.preventDefault(); quickSave(); return; }
+
+    // Cmd+F — find
+    if ((event.metaKey || event.ctrlKey) && event.key === 'f') { event.preventDefault(); openFindBar(); return; }
 
     // F11 — fullscreen
     if (event.key === 'F11') { event.preventDefault(); toggleFullscreen(); return; }
@@ -979,6 +1108,12 @@ editor.addEventListener('beforeinput', (event) => {
     }
 });
 
+// Route native undo/redo (menu or platform gestures) through our history
+editor.addEventListener('beforeinput', (event) => {
+    if (event.inputType === 'historyUndo') { event.preventDefault(); doUndo(); }
+    else if (event.inputType === 'historyRedo') { event.preventDefault(); doRedo(); }
+});
+
 // Prevent typing outside blocks
 editor.addEventListener('beforeinput', (event) => {
     if (!event.inputType.startsWith('insert') && !event.inputType.startsWith('delete')) return;
@@ -1001,6 +1136,9 @@ editor.addEventListener('beforeinput', (event) => {
 
 // Editor input handler
 editor.addEventListener('input', (event) => {
+    scheduleCheckpoint();
+    if (!document.getElementById('find-bar').classList.contains('hidden')) closeFindBar(false);
+
     // Strikethrough trigger (xxxx)
     const sel = window.getSelection();
     if (sel.rangeCount > 0) {
@@ -1105,7 +1243,28 @@ editor.addEventListener('copy', (event) => {
 // Paste handler
 editor.addEventListener('paste', (event) => {
     const cd = event.clipboardData; if (!cd) return;
+    recordCheckpoint();
+
+    // Plain-text markdown → convert to blocks
     const html = cd.getData('text/html');
+    if (!html || !(html.includes('<ul') || html.includes('<ol'))) {
+        const text = cd.getData('text/plain');
+        const looksLikeMarkdown = text && text.split('\n').some(l => /^(#{1,3}|[-*]|\d+\.|>)\s/.test(l.trim()));
+        if (looksLikeMarkdown) {
+            event.preventDefault();
+            const blocks = markdownToBlocks(text);
+            const cb = getCurrentBlock();
+            if (cb && blocks.length > 0) {
+                blocks.forEach(b => cb.parentNode.insertBefore(b, cb.nextSibling));
+                updateNumberedBlocks();
+                focusBlock(blocks[blocks.length - 1], true);
+                autoSave();
+            }
+            centerCurrentBlock(true); enforceEphemeralLimit();
+            return;
+        }
+    }
+
     if (html && (html.includes('<ul') || html.includes('<ol'))) {
         event.preventDefault();
         const temp = document.createElement('div'); temp.innerHTML = html;
@@ -1153,7 +1312,7 @@ editor.addEventListener('contextmenu', (event) => { if (state.forwardOnlyMode) e
 // Selection change
 document.addEventListener('selectionchange', () => {
     if (state.centerMode) {
-        const anyModalOpen = ['command-modal', 'font-modal', 'heading-modal', 'intro-modal', 'dialog-modal']
+        const anyModalOpen = ['command-modal', 'font-modal', 'heading-modal', 'recent-modal', 'intro-modal', 'dialog-modal', 'find-bar']
             .some(id => !document.getElementById(id).classList.contains('hidden'));
         if (anyModalOpen) return;
 
@@ -1183,9 +1342,36 @@ document.addEventListener('selectionchange', () => {
 const fontModal = document.getElementById('font-modal');
 const headingModal = document.getElementById('heading-modal');
 const introModal = document.getElementById('intro-modal');
+const recentModal = document.getElementById('recent-modal');
 
 // Close on click outside
-[fontModal, headingModal].forEach(m => closeOnClickOutside(m));
+[fontModal, headingModal, recentModal].forEach(m => closeOnClickOutside(m));
+
+// Recent files modal
+document.getElementById('recent-cancel-button').addEventListener('click', () => closeModal(recentModal));
+document.getElementById('recent-search').addEventListener('input', () => {
+    state.selectedRecentIndex = 0;
+    renderRecentList(filteredRecentFiles());
+});
+
+attachModalKeyboardNav(document.getElementById('recent-search'), recentModal, {
+    getItems: () => document.getElementById('recent-list').querySelectorAll('.file-item'),
+    getSelectedIndex: () => state.selectedRecentIndex,
+    setSelectedIndex: (i) => { state.selectedRecentIndex = i; },
+    onEnter: (idx) => { const files = filteredRecentFiles(); if (files[idx]) pickRecentFile(files[idx]); },
+    onFilter: () => renderRecentList(filteredRecentFiles()),
+});
+
+// Find bar
+document.getElementById('find-input').addEventListener('input', () => {
+    updateFindCount(find.search(document.getElementById('find-input').value));
+});
+document.getElementById('find-input').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') { event.preventDefault(); updateFindCount(event.shiftKey ? find.prev() : find.next()); }
+    else if (event.key === 'ArrowDown') { event.preventDefault(); updateFindCount(find.next()); }
+    else if (event.key === 'ArrowUp') { event.preventDefault(); updateFindCount(find.prev()); }
+    else if (event.key === 'Escape') { event.preventDefault(); closeFindBar(true); }
+});
 
 introModal.addEventListener('click', (e) => { if (e.target === introModal) { introModal.classList.add('hidden'); editor.focus(); } });
 
@@ -1253,6 +1439,7 @@ document.getElementById('markdown-file-input').addEventListener('change', (event
         editor.innerHTML = '';
         blocks.forEach(b => editor.appendChild(b));
         updateNumberedBlocks();
+        resetHistory();
         if (blocks.length > 0) focusBlock(blocks[0]);
         document.getElementById('markdown-file-input').value = '';
     };
@@ -1308,9 +1495,13 @@ if (localStorage.getItem('focusMode') === 'true') { state.focusMode = true; docu
 const savedLimit = localStorage.getItem('ephemeralWordLimit');
 if (savedLimit) { const p = parseInt(savedLimit, 10); if (!isNaN(p) && p > 0) state.EPHEMERAL_WORD_LIMIT = p; }
 if (localStorage.getItem('wordCountVisible') === 'true') { state.wordCountVisible = true; document.getElementById('word-count-display').classList.remove('hidden'); }
+const savedSpellcheck = localStorage.getItem('spellcheck');
+editor.spellcheck = savedSpellcheck === null ? true : savedSpellcheck === 'true';
+state.currentStage = localStorage.getItem('writingStage');
 
 // Load autosaved content, then re-attach the synced file (if any)
 loadContent();
+resetHistory();
 setTimeout(() => restoreFileHandle(), 50);
 
 // Show intro on first visit

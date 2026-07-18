@@ -16,6 +16,16 @@
         <input type="text" id="command-search" placeholder="Search commands..." autocomplete="off" aria-label="Search commands" role="combobox" aria-expanded="true" aria-controls="command-list">
         <div id="command-list" role="listbox" aria-label="Commands"></div>
     </div>
+    <div id="recent-modal" class="hidden modal-overlay" role="dialog" aria-label="Open recent file">
+        <div class="modal-content">
+            <h3>Open Recent</h3>
+            <input type="text" id="recent-search" placeholder="Search recent files..." autocomplete="off">
+            <div id="recent-list" class="file-list"></div>
+            <div class="modal-buttons">
+                <button id="recent-cancel-button" class="modal-button">Cancel</button>
+            </div>
+        </div>
+    </div>
     <div id="font-modal" class="hidden modal-overlay" role="dialog" aria-label="Select font">
         <div class="modal-content">
             <h3>Select Font</h3>
@@ -50,6 +60,11 @@
             </div>
         </div>
     </div>
+    <div id="find-bar" class="hidden" role="search" aria-label="Find in document">
+        <input type="text" id="find-input" placeholder="Find..." autocomplete="off" aria-label="Find text">
+        <span id="find-count" aria-live="polite"></span>
+    </div>
+    <div id="save-status" class="hidden" aria-hidden="true"></div>
     <div id="word-count-display" class="hidden">
         <span id="word-count">0 words</span>
         <span class="separator">•</span>
