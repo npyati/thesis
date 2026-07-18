@@ -8,14 +8,21 @@
 ## Medium Priority
 - [ ] Redesign ephemeral word fading to use time-based approach - words should start fading when written and vanish after ~1 minute
 - [x] Fix cursor restoration after word limit modal — no longer shadows global savedSelection
-
-If last thing I was working on when I closed the app was a saved file, either in browser memory or on disk, keep that as the save location when I reopen the app
-
+- [x] If last thing I was working on when I closed the app was a file on disk, keep that as the save location when I reopen the app — file handle now survives restarts (permission is requested on the first click/keystroke instead of failing silently at load)
 
 ## Feature Ideas
 - [ ] Add writing stage indicator system - color coding or visual indicator for different writing phases (outlining, drafting, fleshing out, editing, polishing, final pass) to help maintain focus on current stage
 
 ## Recently Completed
+- [x] Files are now the permanent home for documents: removed the in-browser document library (save/load/delete modals, doc IDs, URL routing); localStorage keeps only the autosaved working draft
+- [x] Inline formatting (bold/italic/strikethrough) now survives file save/load, Enter splits, Backspace merges, and copy — markdown conversion is lossless both directions
+- [x] Markdown loaded from files is HTML-escaped (a crafted .md file could previously inject markup into the editor)
+- [x] Center-mode spacers no longer leak into saved content
+- [x] Saving an ephemeral document only makes it permanent if the save actually succeeds
+- [x] Command palette no longer renders file names as HTML; corrupt localStorage entries no longer break startup or the palette
+- [x] Service worker: offline fallback no longer errors on uncached requests; non-GET requests skipped; cache bumped to v3
+- [x] Pinch-zoom re-enabled (accessibility)
+- [x] Deleted the unused 6,613-line script.js monolith (superseded by js/ modules)
 - [x] Full modular rewrite: split 6600-line script.js into 8 ES modules (state, blocks, modals, modes, formatting, io, db, utils)
 - [x] Replaced deprecated document.execCommand with DOM range manipulation for bold/italic/strikethrough
 - [x] Added HTML sanitization for content loaded from localStorage (XSS protection)

@@ -144,11 +144,9 @@ export function createNewEphemeralDocument(autoSaveFn) {
     editor.appendChild(firstBlock);
 
     state.currentDocumentIsEphemeral = true;
-    state.currentDocumentName = null;
     state.currentFileHandle = null;
     state.currentFileName = null;
 
-    clearURL();
     clearPageTitle();
     focusBlock(firstBlock);
     if (autoSaveFn) autoSaveFn();
@@ -246,22 +244,6 @@ export function enforceEphemeralLimit() {
     }
 }
 
-// Ephemeral fading is disabled (breaks contenteditable), but keep the clear function
-export function applyEphemeralFading() {
-    // DISABLED: wrapping words in spans breaks contenteditable cursor tracking
-    return;
-}
-
-export function clearEphemeralFading() {
-    const allBlocks = Array.from(getEditor().querySelectorAll('.block'));
-    allBlocks.forEach(block => {
-        const content = block.querySelector('.block-content');
-        if (content && content.querySelector('.ephemeral-word')) {
-            content.textContent = content.textContent;
-        }
-    });
-}
-
 // ──────────────────────────────────
 // Dark mode / Canvas mode / Fullscreen
 // ──────────────────────────────────
@@ -286,24 +268,8 @@ export function toggleFullscreen() {
 }
 
 // ──────────────────────────────────
-// URL and page title helpers
+// Page title helpers
 // ──────────────────────────────────
-export function updateURL(docId) {
-    const url = new URL(window.location);
-    url.searchParams.set('id', docId);
-    window.history.pushState({}, '', url);
-}
-
-export function clearURL() {
-    const url = new URL(window.location);
-    url.searchParams.delete('id');
-    window.history.pushState({}, '', url);
-}
-
-export function getDocIdFromURL() {
-    return new URLSearchParams(window.location.search).get('id');
-}
-
 export function updatePageTitle(docName) {
     document.title = `thesis: ${docName}`;
 }
