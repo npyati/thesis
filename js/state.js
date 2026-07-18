@@ -22,6 +22,7 @@ const state = {
     filteredCommandsList: [],
     currentFileHandle: null,
     currentFileName: null,
+    saveStatus: 'hidden',
     currentStage: null,
     selectedRecentIndex: 0,
     deferredInstallPrompt: null,

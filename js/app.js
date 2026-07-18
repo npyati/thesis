@@ -629,6 +629,9 @@ function showCommandModal() {
 
     // Mode status badges
     const modes = [];
+    if (state.saveStatus === 'detached') modes.push('File disconnected');
+    else if (state.saveStatus === 'saving') modes.push('Saving…');
+    else if (state.saveStatus === 'synced') modes.push('Saved');
     if (state.currentStage) modes.push(`Stage: ${state.currentStage.charAt(0).toUpperCase()}${state.currentStage.slice(1)}`);
     if (state.retypeActive) modes.push('Retype');
     if (state.blindMode) modes.push('Blind');

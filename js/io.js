@@ -123,16 +123,10 @@ export function loadContent() {
 }
 
 // ──────────────────────────────────
-// Save-state indicator
+// Save-state — surfaced in the command palette, not on the canvas
 // ──────────────────────────────────
 export function setSaveStatus(status) { // 'synced' | 'saving' | 'detached' | 'hidden'
-    const el = document.getElementById('save-status');
-    if (!el) return;
-    el.className = status === 'hidden' ? 'hidden' : status;
-    el.title = status === 'synced' ? `Saved to ${state.currentFileName}`
-        : status === 'saving' ? 'Saving…'
-        : status === 'detached' ? 'File connection lost — use Save to reattach'
-        : '';
+    state.saveStatus = status;
 }
 
 // ──────────────────────────────────
