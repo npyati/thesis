@@ -11,6 +11,7 @@ import {
     centerCurrentBlock, updateFocusParagraph, debouncedUpdateFocusParagraph,
     createNewEphemeralDocument, enforceEphemeralLimit,
     applyStage, toggleSpellcheck, toggleBlindMode, setBlindChar,
+    toggleFogMode, updateFogBlock,
 } from './modes.js';
 import { startRetype, retypeNext, retypePrev, endRetype, resumeRetypeIfActive, resumeRetype, recoverLastSource } from './retype.js';
 import {
@@ -493,6 +494,7 @@ const commands = [
     { name: 'Resume Retype', description: 'Reopen the retype bar where you left off (undo an accidental ⌘.)', action: () => resumeRetype(showAlert), category: 'Write' },
     { name: 'Recover Last Retype Source', description: 'Load the old draft from your last retype back into the editor', action: () => recoverLastSource(showAlert, showConfirm), category: 'Write' },
     { name: 'End Retype', description: 'Finish retyping and keep the new draft', action: endRetype, category: 'Write' },
+    { name: 'Toggle Fog Mode', description: 'Finished text blurs to a smudge; the line you\'re writing stays sharp', action: toggleFogMode, category: 'Write' },
     { name: 'Toggle Blind Mode', description: 'Write without seeing the words — only the last letter shows', action: toggleBlindMode, category: 'Write' },
     { name: 'Toggle Forward-Only Mode', description: 'Prevent backspace, deletion, and cursor movement', action: toggleForwardOnlyMode, category: 'Write' },
     { name: 'Change Ephemeral Word Limit', description: 'Set how many words linger before fading into the past', action: changeEphemeralWordLimit, category: 'Write' },
@@ -639,6 +641,7 @@ function renderStatusHeader() {
     if (state.currentStage) modes.push(`${cap(state.currentStage)} stage`);
     if (state.retypeActive) modes.push('Retype');
     if (state.blindMode) modes.push('Blind');
+    if (state.fogMode) modes.push('Fog');
     if (state.focusMode) modes.push('Focus');
     if (state.centerMode) modes.push('Center');
     if (state.forwardOnlyMode) modes.push('Forward-only');
@@ -1370,6 +1373,7 @@ editor.addEventListener('contextmenu', (event) => { if (state.forwardOnlyMode ||
 
 // Selection change
 document.addEventListener('selectionchange', () => {
+    if (state.fogMode) updateFogBlock();
     if (state.centerMode) {
         const anyModalOpen = ['command-modal', 'font-modal', 'heading-modal', 'recent-modal', 'intro-modal', 'dialog-modal', 'find-bar']
             .some(id => !document.getElementById(id).classList.contains('hidden'));

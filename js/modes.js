@@ -43,6 +43,33 @@ export function setBlindChar(ch) {
 }
 
 // ──────────────────────────────────
+// Fog mode — the block you're writing stays sharp; everything you've
+// finished blurs into an unreadable smudge. Like ephemeral, but it withholds
+// the past instead of erasing it. Session-only: a fogged document on reload
+// would look broken.
+// ──────────────────────────────────
+let _lastFogBlock = null;
+
+export function toggleFogMode() {
+    state.fogMode = !state.fogMode;
+    document.body.classList.toggle('fog-mode', state.fogMode);
+    _lastFogBlock = null;
+    if (state.fogMode) {
+        updateFogBlock();
+    } else {
+        getEditor().querySelectorAll('.block.fog-clear').forEach(b => b.classList.remove('fog-clear'));
+    }
+}
+
+export function updateFogBlock() {
+    if (!state.fogMode) return;
+    const current = getCurrentBlock();
+    if (current === _lastFogBlock) return;
+    _lastFogBlock = current;
+    getEditor().querySelectorAll('.block').forEach(b => b.classList.toggle('fog-clear', b === current));
+}
+
+// ──────────────────────────────────
 // Spellcheck
 // ──────────────────────────────────
 export function applySpellcheck(enabled) {

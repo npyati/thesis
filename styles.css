@@ -665,6 +665,35 @@ body.dark-mode #blind-char {
     color: #e0e0e0;
 }
 
+/* Fog mode — finished text blurs into an unreadable smudge; the block you're
+   writing stays sharp. */
+body.fog-mode .block-content {
+    color: transparent;
+    text-shadow: 0 0 8px rgba(51, 51, 51, 0.5);
+    transition: color 0.25s ease, text-shadow 0.25s ease;
+}
+
+body.fog-mode .block-heading1 .block-content,
+body.fog-mode .block-heading2 .block-content,
+body.fog-mode .block-heading3 .block-content {
+    text-shadow: 0 0 14px rgba(51, 51, 51, 0.5);
+}
+
+body.fog-mode .block.fog-clear .block-content {
+    color: inherit;
+    text-shadow: none;
+}
+
+body.fog-mode.dark-mode .block-content {
+    text-shadow: 0 0 8px rgba(224, 224, 224, 0.5);
+}
+
+body.fog-mode.dark-mode .block-heading1 .block-content,
+body.fog-mode.dark-mode .block-heading2 .block-content,
+body.fog-mode.dark-mode .block-heading3 .block-content {
+    text-shadow: 0 0 14px rgba(224, 224, 224, 0.5);
+}
+
 /* Retype mode — old draft dimmed above, fresh document below */
 #retype-bar {
     position: fixed;
@@ -757,6 +786,12 @@ body.dark-mode #retype-meta {
     /* Undo focus-mode fading on paper */
     .block {
         opacity: 1 !important;
+    }
+
+    /* Reveal fogged text when printing */
+    body.fog-mode .block-content {
+        color: #000 !important;
+        text-shadow: none !important;
     }
 }
 
