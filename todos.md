@@ -17,6 +17,8 @@
 - Ephemeral means no record — no compost/recovery files for faded words; the point is writing without a trace
 
 ## Recently Completed
+- [x] Resume Retype (undoes an accidental ⌘.) and Recover Last Retype Source (loads the old draft back, Cmd+Z-able) — End Retype is now fully reversible
+- [x] Fixed Install App: manifest icons pointed outside the app folder (404 → Chrome never offered install); icons now live in the app folder and are cached offline
 - [x] Retype mode — old draft shows one paragraph at a time above a fresh document (⌘↓ next, ⌘↑ back, ⌘. finish); skipping a paragraph deletes by omission; original file untouched; survives reload
 - [x] Blind mode (ilys-style) — words invisible while typing, only the last character shows large and faint; editing keys blocked while blind; session-only (never persisted)
 - [x] Stage presets: Draft (forward-only, focus, no spellcheck), Revise (unlocked), Polish (spellcheck on) — manual mode toggles clear the stage label

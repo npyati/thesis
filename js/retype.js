@@ -3,11 +3,19 @@
 // Skipping a paragraph (⌘↓ without typing) is deletion by omission.
 
 import state from './state.js';
-import { getEditor, createBlockElement, focusBlock } from './blocks.js';
-import { htmlToMarkdown, autoSave, setSaveStatus } from './io.js';
+import { getEditor, createBlockElement, focusBlock, updateNumberedBlocks } from './blocks.js';
+import { htmlToMarkdown, markdownToBlocks, autoSave, setSaveStatus } from './io.js';
 import { clearFileHandleFromDB } from './db.js';
 import { clearPageTitle } from './modes.js';
-import { resetHistory } from './history.js';
+import { resetHistory, recordCheckpoint } from './history.js';
+
+function readSavedSource() {
+    try {
+        const saved = JSON.parse(localStorage.getItem('retypeSource'));
+        if (saved && Array.isArray(saved.lines) && saved.lines.length > 0) return saved;
+    } catch (e) { /* corrupt entry */ }
+    return null;
+}
 
 let sourceLines = [];
 let index = 0;
@@ -95,18 +103,70 @@ export function endRetype() {
 // Re-enter retype after a reload mid-session
 export function resumeRetypeIfActive() {
     if (localStorage.getItem('retypeActive') !== 'true') return;
-    try {
-        const saved = JSON.parse(localStorage.getItem('retypeSource'));
-        if (!saved || !Array.isArray(saved.lines) || saved.lines.length === 0) {
-            localStorage.removeItem('retypeActive');
-            return;
-        }
-        sourceLines = saved.lines;
-        index = Math.min(saved.index || 0, sourceLines.length);
-        state.retypeActive = true;
-        document.body.classList.add('retype-mode');
-        renderBar();
-    } catch (e) {
+    const saved = readSavedSource();
+    if (!saved) {
         localStorage.removeItem('retypeActive');
+        return;
     }
+    enterRetype(saved);
+}
+
+// Reopen the source bar where it was left — undoes an accidental ⌘.
+// Works until the next retype overwrites the stored source.
+export async function resumeRetype(showAlertFn) {
+    if (state.retypeActive) return;
+    const saved = readSavedSource();
+    if (!saved) {
+        if (showAlertFn) await showAlertFn('No retype session to resume.');
+        return;
+    }
+    enterRetype(saved);
+}
+
+function enterRetype(saved) {
+    sourceLines = saved.lines;
+    index = Math.min(saved.index || 0, sourceLines.length);
+    state.retypeActive = true;
+    document.body.classList.add('retype-mode');
+    persist();
+    renderBar();
+}
+
+// Load the old draft from the last retype back into the editor.
+// Undoable via Cmd+Z (a checkpoint is recorded before replacing).
+export async function recoverLastSource(showAlertFn, showConfirmFn) {
+    const saved = readSavedSource();
+    if (!saved) {
+        if (showAlertFn) await showAlertFn('No saved retype source found.');
+        return;
+    }
+    if (showConfirmFn) {
+        const confirmed = await showConfirmFn('Replace the current document with the last retype source? (Cmd+Z undoes this.)');
+        if (!confirmed) return;
+    }
+
+    if (state.retypeActive) endRetype();
+    recordCheckpoint();
+
+    // The recovered draft is fresh and unsaved — detach any synced file so
+    // autosave can't overwrite it with the old draft
+    state.currentFileHandle = null;
+    state.currentFileName = null;
+    await clearFileHandleFromDB();
+    clearPageTitle();
+    setSaveStatus('hidden');
+    state.currentDocumentIsEphemeral = false;
+
+    const editor = getEditor();
+    const blocks = markdownToBlocks(sourceLinesToMarkdown(saved.lines));
+    editor.innerHTML = '';
+    blocks.forEach(b => editor.appendChild(b));
+    updateNumberedBlocks();
+    autoSave();
+    const firstBlock = editor.querySelector('.block');
+    if (firstBlock) focusBlock(firstBlock);
+}
+
+function sourceLinesToMarkdown(lines) {
+    return lines.join('\n');
 }

@@ -1,7 +1,7 @@
 // Service worker with network-first strategy for HTML/JS and cache-first for static assets
 // Bump CACHE_NAME manually when cached assets change.
 
-const CACHE_NAME = 'thesis-v6';
+const CACHE_NAME = 'thesis-v7';
 const ASSETS_TO_CACHE = [
     './',
     './index.html',
@@ -20,6 +20,9 @@ const ASSETS_TO_CACHE = [
     './js/find.js',
     './js/retype.js',
     './favicon.ico',
+    './android-chrome-192x192.png',
+    './android-chrome-512x512.png',
+    './apple-touch-icon.png',
     './manifest.json'
 ];
 
