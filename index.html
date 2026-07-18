@@ -11,6 +11,7 @@
     <link rel="manifest" href="manifest.json">
 </head>
 <body>
+    <div id="titlebar" aria-hidden="true"></div>
     <div id="editor" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Document editor" placeholder="Start writing..."></div>
     <div id="command-modal" class="hidden" role="dialog" aria-label="Command palette">
         <div id="mode-status" role="status" aria-live="polite"></div>
@@ -68,7 +69,13 @@
             <span class="retype-hint">⌘↓ next · ⌘↑ back · ⌘. finish</span>
         </div>
     </div>
-    <div id="blind-overlay" class="hidden" aria-hidden="true"><span id="blind-char"></span></div>
+    <div id="blind-overlay" class="hidden" aria-hidden="true">
+        <div id="blind-readout">
+            <div id="blind-words">0</div>
+            <div id="blind-sub">words</div>
+            <div id="blind-chars">0 characters</div>
+        </div>
+    </div>
     <div id="find-bar" class="hidden" role="search" aria-label="Find in document">
         <input type="text" id="find-input" placeholder="Find..." autocomplete="off" aria-label="Find text">
         <span id="find-count" aria-live="polite"></span>

@@ -17,7 +17,8 @@
 - Ephemeral means no record — no compost/recovery files for faded words; the point is writing without a trace
 
 ## Recently Completed
-- [x] Fog mode — finished blocks blur to an unreadable smudge, active block stays sharp (differentiated take on blind writing; reuses focus-mode block tracking). Kept alongside blind mode for comparison — remove one once decided.
+- [x] Reframed the two focus flavors as Fade Focus (dim by distance) and Fog Focus (blur all but the active block); mutually exclusive, both under View
+- [x] Blind mode now shows a live word + character count typed this session in the center, instead of the flashing last letter (the letter wasn't useful)
 - [x] Resume Retype (undoes an accidental ⌘.) and Recover Last Retype Source (loads the old draft back, Cmd+Z-able) — End Retype is now fully reversible
 - [x] Fixed Install App: manifest icons pointed outside the app folder (404 → Chrome never offered install); icons now live in the app folder and are cached offline
 - [x] Retype mode — old draft shows one paragraph at a time above a fresh document (⌘↓ next, ⌘↑ back, ⌘. finish); skipping a paragraph deletes by omission; original file untouched; survives reload

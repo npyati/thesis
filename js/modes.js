@@ -19,13 +19,23 @@ export function toggleForwardOnlyMode() {
 // Deliberately not persisted: reopening the app to an invisible document
 // would read as data loss.
 // ──────────────────────────────────
+let _blindBaseline = { words: 0, chars: 0 };
+
+function docCounts() {
+    const editor = getEditor();
+    const text = editor.innerText || editor.textContent || '';
+    const words = text.trim().split(/\s+/).filter(w => w.length > 0).length;
+    return { words, chars: text.length };
+}
+
 export function toggleBlindMode() {
     state.blindMode = !state.blindMode;
     document.body.classList.toggle('blind-mode', state.blindMode);
     const overlay = document.getElementById('blind-overlay');
     if (state.blindMode) {
+        _blindBaseline = docCounts();
         overlay.classList.remove('hidden');
-        setBlindChar('');
+        updateBlindCount();
     } else {
         overlay.classList.add('hidden');
         const blocks = getEditor().querySelectorAll('.block');
@@ -33,32 +43,42 @@ export function toggleBlindMode() {
     }
 }
 
-export function setBlindChar(ch) {
-    const el = document.getElementById('blind-char');
-    if (!el) return;
-    el.textContent = ch === ' ' ? '·' : ch;
-    el.classList.remove('pulse');
-    void el.offsetWidth;
-    el.classList.add('pulse');
+// Show a running count of what's been typed this blind session — a calm
+// anchor in place of seeing the words themselves.
+export function updateBlindCount() {
+    if (!state.blindMode) return;
+    const now = docCounts();
+    const words = Math.max(0, now.words - _blindBaseline.words);
+    const chars = Math.max(0, now.chars - _blindBaseline.chars);
+    const wordsEl = document.getElementById('blind-words');
+    const charsEl = document.getElementById('blind-chars');
+    if (wordsEl) wordsEl.textContent = words;
+    if (charsEl) charsEl.textContent = `${chars} character${chars === 1 ? '' : 's'}`;
 }
 
 // ──────────────────────────────────
-// Fog mode — the block you're writing stays sharp; everything you've
-// finished blurs into an unreadable smudge. Like ephemeral, but it withholds
-// the past instead of erasing it. Session-only: a fogged document on reload
-// would look broken.
+// Fog focus — the block you're writing stays sharp; everything else blurs
+// into an unreadable smudge. A sibling of Fade focus (below); the two are
+// mutually exclusive. Session-only: a fogged document on reload would look
+// broken.
 // ──────────────────────────────────
 let _lastFogBlock = null;
 
-export function toggleFogMode() {
-    state.fogMode = !state.fogMode;
-    document.body.classList.toggle('fog-mode', state.fogMode);
+function setFogMode(on) {
+    state.fogMode = on;
+    document.body.classList.toggle('fog-mode', on);
     _lastFogBlock = null;
-    if (state.fogMode) {
+    if (on) {
+        if (state.focusMode) setFadeFocus(false); // one focus flavor at a time
         updateFogBlock();
     } else {
         getEditor().querySelectorAll('.block.fog-clear').forEach(b => b.classList.remove('fog-clear'));
     }
+}
+
+export function toggleFogMode() {
+    setFogMode(!state.fogMode);
+    clearStage();
 }
 
 export function updateFogBlock() {
@@ -184,23 +204,28 @@ export function centerCurrentBlock(instant = false) {
 }
 
 // ──────────────────────────────────
-// Focus mode (with debounced updates)
+// Fade focus — the paragraphs around the one you're on dim by distance.
+// Mutually exclusive with Fog focus (above).
 // ──────────────────────────────────
-export function toggleFocusMode() {
-    state.focusMode = !state.focusMode;
-    document.body.classList.toggle('focus-mode', state.focusMode);
-    localStorage.setItem('focusMode', state.focusMode);
-    clearStage();
-
-    if (state.focusMode) {
+function setFadeFocus(on) {
+    state.focusMode = on;
+    document.body.classList.toggle('focus-mode', on);
+    localStorage.setItem('focusMode', on);
+    if (on) {
+        if (state.fogMode) setFogMode(false); // one focus flavor at a time
+        _lastFocusedBlock = null;
         updateFocusParagraph();
     } else {
-        const allBlocks = getEditor().querySelectorAll('.block');
-        allBlocks.forEach(el => {
+        getEditor().querySelectorAll('.block').forEach(el => {
             el.classList.remove('focus-active');
             el.style.opacity = '';
         });
     }
+}
+
+export function toggleFocusMode() {
+    setFadeFocus(!state.focusMode);
+    clearStage();
 }
 
 let _lastFocusedBlock = null;
