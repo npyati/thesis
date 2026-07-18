@@ -484,7 +484,7 @@ const commands = [
     { name: 'Open Recent', description: 'Reopen a recently used file', action: openRecentModal, category: 'Document' },
     { name: 'Save to File As...', description: 'Save and auto-sync to a new .md file on disk', action: saveToNewFile, category: 'Document' },
     { name: 'New Document', description: 'Start a new document', action: clearAll, category: 'Document' },
-    { name: 'New Ephemeral Document', description: 'Write in pure flow - oldest words fade away as new thoughts emerge', action: () => { createNewEphemeralDocument(autoSave); setSaveStatus('hidden'); }, category: 'Document' },
+    { name: 'New Ephemeral Document', description: 'Write in pure flow - oldest words dissolve as new thoughts emerge', action: () => { createNewEphemeralDocument(autoSave); setSaveStatus('hidden'); }, category: 'Document' },
 
     // Write
     { name: 'Draft Stage', description: 'Forward-only, focus mode, no spellcheck — just get words out', action: () => applyStage('draft'), category: 'Write' },
