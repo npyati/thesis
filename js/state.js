@@ -15,6 +15,7 @@ const state = {
     centerMode: false,
     focusMode: false,
     blindMode: false,
+    fogMode: false,
     retypeActive: false,
     EPHEMERAL_WORD_LIMIT: 100,
     multiBlockSelection: [],
