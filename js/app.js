@@ -463,7 +463,7 @@ async function installApp() {
 // ──────────────────────────────────
 // Intro
 // ──────────────────────────────────
-const introHTML = `<p><strong>thesis</strong> is a minimalist text editor.</p><p>It's designed for focus and creativity.</p><p>The whole thing works primarily through the keyboard. You shouldn't have to use the mouse.</p><p>Here are the basics</p><ul><li>Type / to open a popup menu of commands. Use arrow keys or search to pick one. When search returns only one command, pressing [enter] will execute.</li><li>Type / again to close the popup. Press [space] at the empty prompt to keep the /.</li><li>Nothing is sent or saved online. All documents are stored locally in your browser.</li></ul><p>That's enough for now. You can find the rest by exploring. There isn't much - just what's necessary.</p><p><strong>This is a work in progress.</strong> There are still plenty of bugs to fix and improvements to make. Send me a note if you have ideas.</p>`;
+const introHTML = `<p><strong>thesis</strong> is a minimalist text editor, designed for focus and creativity.</p><p>It works through the keyboard — you shouldn't need the mouse. Type <strong>/</strong> to open the command menu, then search or use the arrow keys and press <strong>[enter]</strong>. Type <strong>/</strong> again to close it (press <strong>[space]</strong> at the empty prompt to keep a literal /).</p><p>Your writing saves automatically as you type — you never need to reach for Save. It's kept in this browser, and you can also <em>Open File</em> or <em>Save to File As…</em> to sync a real <strong>.md</strong> file on your computer. Nothing is ever sent online.</p><p>There are a few different ways to write, all in the / menu:</p><ul><li><strong>Stages</strong> — Draft, Revise, and Polish set the editor up for each phase of writing.</li><li><strong>Forward-only</strong> — type like a typewriter, with no going back.</li><li><strong>Blind</strong> — hide your words as you write; only the last letter shows.</li><li><strong>Ephemeral</strong> — the oldest words fade away as new ones arrive, leaving no record.</li><li><strong>Retype</strong> — redraft by retyping your old draft one paragraph at a time.</li><li><strong>Focus &amp; Center</strong> — dim everything but the current line, or keep it centered.</li></ul><p>There's more to find — fonts, dark mode, find, export to Markdown or Word — but that's enough to start. There isn't much here, just what's necessary.</p><p><strong>This is a work in progress.</strong> Send me a note if you have ideas.</p>`;
 
 function showIntro() {
     document.getElementById('intro-text').innerHTML = introHTML;
@@ -473,55 +473,71 @@ function showIntro() {
 // ──────────────────────────────────
 // Commands
 // ──────────────────────────────────
+// Category order controls the grouping shown in the command menu
+const CATEGORY_ORDER = ['Document', 'Write', 'Format', 'Navigate', 'View', 'Share', 'App'];
+
 const commands = [
-    { name: 'Save', description: 'Save to the current file (or choose one)', action: quickSave },
-    { name: 'Open Recent', description: 'Reopen a recently used file', action: openRecentModal },
-    { name: 'New Ephemeral Document', description: 'Write in pure flow - oldest words fade away as new thoughts emerge', action: () => { createNewEphemeralDocument(autoSave); setSaveStatus('hidden'); } },
-    { name: 'Change Ephemeral Word Limit', description: 'Set how many words linger before fading into the past', action: changeEphemeralWordLimit },
-    { name: 'Retype Document', description: 'Redraft by retyping — the old draft shows a paragraph at a time while you type it fresh', action: () => startRetype(showAlert) },
-    { name: 'End Retype', description: 'Finish retyping and keep the new draft', action: endRetype },
-    { name: 'Resume Retype', description: 'Reopen the retype bar where you left off (undo an accidental ⌘.)', action: () => resumeRetype(showAlert) },
-    { name: 'Recover Last Retype Source', description: 'Load the old draft from your last retype back into the editor', action: () => recoverLastSource(showAlert, showConfirm) },
-    { name: 'Toggle Blind Mode', description: 'Write without seeing the words — only the last letter shows', action: toggleBlindMode },
-    { name: 'Draft Stage', description: 'Forward-only, focus mode, no spellcheck — just get words out', action: () => applyStage('draft') },
-    { name: 'Revise Stage', description: 'Unlock editing and see the whole document', action: () => applyStage('revise') },
-    { name: 'Polish Stage', description: 'Spellcheck on for the final pass', action: () => applyStage('polish') },
-    { name: 'Find', description: 'Find text in the document (Cmd+F)', action: openFindBar },
-    { name: 'Jump to Heading', description: 'Navigate to a heading in the document', action: openHeadingModal },
-    { name: 'Heading 1', description: 'Format current line(s) as large heading', action: () => applyHeading(1) },
-    { name: 'Heading 2', description: 'Format current line(s) as medium heading', action: () => applyHeading(2) },
-    { name: 'Heading 3', description: 'Format current line(s) as small heading', action: () => applyHeading(3) },
-    { name: 'Normal Text', description: 'Convert current line(s) to normal text', action: convertToNormalText },
-    { name: 'Bullet List', description: 'Toggle bullet list for current line(s)', action: () => toggleListType('bullet') },
-    { name: 'Numbered List', description: 'Toggle numbered list for current line(s)', action: () => toggleListType('numbered') },
-    { name: 'Block Quote', description: 'Format current line(s) as a block quote', action: applyBlockQuote },
-    { name: 'Strikethrough Last Word', description: 'Apply strikethrough to the last typed word (type xxxx)', action: strikethroughLastWord },
-    { name: 'Delete All Strikethrough', description: 'Remove all struck-through words from document', action: deleteAllStrikethrough },
-    { name: 'Change Font', description: 'Select font for the editor', action: openFontModal },
-    { name: 'Increase Font Size', description: 'Make text larger (Ctrl/Cmd + +)', action: increaseFontSize },
-    { name: 'Decrease Font Size', description: 'Make text smaller (Ctrl/Cmd + -)', action: decreaseFontSize },
-    { name: 'Increase Line Height', description: 'Make text more spacious (Ctrl/Cmd + ])', action: increaseLineHeight },
-    { name: 'Decrease Line Height', description: 'Make text more compact (Ctrl/Cmd + [)', action: decreaseLineHeight },
-    { name: 'Toggle Forward-Only Mode', description: 'Prevent backspace, deletion, and cursor movement', action: toggleForwardOnlyMode },
-    { name: 'Toggle Center Mode', description: 'Keep active line centered in viewport', action: toggleCenterMode },
-    { name: 'Toggle Focus Mode', description: 'Fade non-active paragraphs', action: toggleFocusMode },
-    { name: 'Toggle Page Style', description: 'Switch between page and canvas view', action: togglePageStyle },
-    { name: 'Toggle Fullscreen', description: 'Enter/exit fullscreen mode (F11)', action: toggleFullscreen },
-    { name: 'Toggle Dark Mode', description: 'Switch between light and dark theme', action: toggleDarkMode },
-    { name: 'Toggle Spellcheck', description: 'Show or hide spelling squiggles', action: toggleSpellcheck },
-    { name: 'Toggle Word Count', description: 'Show/hide word and character count', action: showWordCountToggle },
-    { name: 'New Document', description: 'Start a new document', action: clearAll },
-    { name: 'Copy All', description: 'Copy all content to clipboard', action: copyAll },
-    { name: 'Export as Word', description: 'Download content as Word (.docx) file', action: exportAsWord },
-    { name: 'Export as Markdown', description: 'Download a copy as a .md file', action: exportAsMarkdown },
-    { name: 'Print', description: 'Print the document or save as PDF', action: () => window.print() },
-    { name: 'Copy as Markdown', description: 'Copy content as Markdown to clipboard', action: copyAsMarkdown },
-    { name: 'Open File', description: 'Open and auto-sync with a .md file on disk', action: importFromMarkdown },
-    { name: 'Save to File As...', description: 'Save and auto-sync to a .md file on disk', action: saveToNewFile },
-    { name: 'Delete Block', description: 'Delete current block or selected blocks', action: deleteBlocks },
-    { name: 'Show Intro', description: 'What is this?', action: showIntro },
-    { name: 'Clear Storage', description: 'Clear the autosaved draft from browser memory', action: clearStorage },
-    { name: 'Install App', description: 'Install thesis as a standalone app (no browser chrome)', action: installApp },
+    // Document
+    { name: 'Save', description: 'Save to the current file (or choose one)', action: quickSave, category: 'Document' },
+    { name: 'Open File', description: 'Open and auto-sync with a .md file on disk', action: importFromMarkdown, category: 'Document' },
+    { name: 'Open Recent', description: 'Reopen a recently used file', action: openRecentModal, category: 'Document' },
+    { name: 'Save to File As...', description: 'Save and auto-sync to a new .md file on disk', action: saveToNewFile, category: 'Document' },
+    { name: 'New Document', description: 'Start a new document', action: clearAll, category: 'Document' },
+    { name: 'New Ephemeral Document', description: 'Write in pure flow - oldest words fade away as new thoughts emerge', action: () => { createNewEphemeralDocument(autoSave); setSaveStatus('hidden'); }, category: 'Document' },
+
+    // Write
+    { name: 'Draft Stage', description: 'Forward-only, focus mode, no spellcheck — just get words out', action: () => applyStage('draft'), category: 'Write' },
+    { name: 'Revise Stage', description: 'Unlock editing and see the whole document', action: () => applyStage('revise'), category: 'Write' },
+    { name: 'Polish Stage', description: 'Spellcheck on for the final pass', action: () => applyStage('polish'), category: 'Write' },
+    { name: 'Retype Document', description: 'Redraft by retyping — the old draft shows a paragraph at a time while you type it fresh', action: () => startRetype(showAlert), category: 'Write' },
+    { name: 'Resume Retype', description: 'Reopen the retype bar where you left off (undo an accidental ⌘.)', action: () => resumeRetype(showAlert), category: 'Write' },
+    { name: 'Recover Last Retype Source', description: 'Load the old draft from your last retype back into the editor', action: () => recoverLastSource(showAlert, showConfirm), category: 'Write' },
+    { name: 'End Retype', description: 'Finish retyping and keep the new draft', action: endRetype, category: 'Write' },
+    { name: 'Toggle Blind Mode', description: 'Write without seeing the words — only the last letter shows', action: toggleBlindMode, category: 'Write' },
+    { name: 'Toggle Forward-Only Mode', description: 'Prevent backspace, deletion, and cursor movement', action: toggleForwardOnlyMode, category: 'Write' },
+    { name: 'Change Ephemeral Word Limit', description: 'Set how many words linger before fading into the past', action: changeEphemeralWordLimit, category: 'Write' },
+
+    // Format
+    { name: 'Heading 1', description: 'Format current line(s) as large heading', action: () => applyHeading(1), category: 'Format' },
+    { name: 'Heading 2', description: 'Format current line(s) as medium heading', action: () => applyHeading(2), category: 'Format' },
+    { name: 'Heading 3', description: 'Format current line(s) as small heading', action: () => applyHeading(3), category: 'Format' },
+    { name: 'Normal Text', description: 'Convert current line(s) to normal text', action: convertToNormalText, category: 'Format' },
+    { name: 'Bullet List', description: 'Toggle bullet list for current line(s)', action: () => toggleListType('bullet'), category: 'Format' },
+    { name: 'Numbered List', description: 'Toggle numbered list for current line(s)', action: () => toggleListType('numbered'), category: 'Format' },
+    { name: 'Block Quote', description: 'Format current line(s) as a block quote', action: applyBlockQuote, category: 'Format' },
+    { name: 'Strikethrough Last Word', description: 'Apply strikethrough to the last typed word (type xxxx)', action: strikethroughLastWord, category: 'Format' },
+    { name: 'Delete All Strikethrough', description: 'Remove all struck-through words from document', action: deleteAllStrikethrough, category: 'Format' },
+    { name: 'Delete Block', description: 'Delete current block or selected blocks', action: deleteBlocks, category: 'Format' },
+
+    // Navigate
+    { name: 'Find', description: 'Find text in the document (Cmd+F)', action: openFindBar, category: 'Navigate' },
+    { name: 'Jump to Heading', description: 'Navigate to a heading in the document', action: openHeadingModal, category: 'Navigate' },
+
+    // View
+    { name: 'Toggle Focus Mode', description: 'Fade non-active paragraphs', action: toggleFocusMode, category: 'View' },
+    { name: 'Toggle Center Mode', description: 'Keep active line centered in viewport', action: toggleCenterMode, category: 'View' },
+    { name: 'Toggle Page Style', description: 'Switch between page and canvas view', action: togglePageStyle, category: 'View' },
+    { name: 'Toggle Dark Mode', description: 'Switch between light and dark theme', action: toggleDarkMode, category: 'View' },
+    { name: 'Toggle Fullscreen', description: 'Enter/exit fullscreen mode (F11)', action: toggleFullscreen, category: 'View' },
+    { name: 'Toggle Spellcheck', description: 'Show or hide spelling squiggles', action: toggleSpellcheck, category: 'View' },
+    { name: 'Toggle Word Count', description: 'Show/hide word and character count', action: showWordCountToggle, category: 'View' },
+    { name: 'Change Font', description: 'Select font for the editor', action: openFontModal, category: 'View' },
+    { name: 'Increase Font Size', description: 'Make text larger (Ctrl/Cmd + +)', action: increaseFontSize, category: 'View' },
+    { name: 'Decrease Font Size', description: 'Make text smaller (Ctrl/Cmd + -)', action: decreaseFontSize, category: 'View' },
+    { name: 'Increase Line Height', description: 'Make text more spacious (Ctrl/Cmd + ])', action: increaseLineHeight, category: 'View' },
+    { name: 'Decrease Line Height', description: 'Make text more compact (Ctrl/Cmd + [)', action: decreaseLineHeight, category: 'View' },
+
+    // Share
+    { name: 'Copy All', description: 'Copy all content to clipboard', action: copyAll, category: 'Share' },
+    { name: 'Copy as Markdown', description: 'Copy content as Markdown to clipboard', action: copyAsMarkdown, category: 'Share' },
+    { name: 'Export as Markdown', description: 'Download a copy as a .md file', action: exportAsMarkdown, category: 'Share' },
+    { name: 'Export as Word', description: 'Download content as Word (.docx) file', action: exportAsWord, category: 'Share' },
+    { name: 'Print', description: 'Print the document or save as PDF', action: () => window.print(), category: 'Share' },
+
+    // App
+    { name: 'Show Intro', description: 'What is this?', action: showIntro, category: 'App' },
+    { name: 'Install App', description: 'Install thesis as a standalone app (no browser chrome)', action: installApp, category: 'App' },
+    { name: 'Clear Storage', description: 'Clear the autosaved draft from browser memory', action: clearStorage, category: 'App' },
 ];
 
 // ──────────────────────────────────
@@ -533,58 +549,59 @@ const commandList = document.getElementById('command-list');
 const modeStatus = document.getElementById('mode-status');
 
 function filterCommands(searchTerm) {
-    const commandUsage = readJSON('commandUsage', {});
-    const filtered = commands.filter(cmd =>
-        cmd.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        cmd.description.toLowerCase().includes(searchTerm.toLowerCase())
-    );
-    filtered.sort((a, b) => (commandUsage[b.name] || 0) - (commandUsage[a.name] || 0));
+    const term = searchTerm.toLowerCase().trim();
+    const matches = (cmd) =>
+        cmd.name.toLowerCase().includes(term) || cmd.description.toLowerCase().includes(term);
 
-    if (state.currentFileName) {
-        const qsc = {
-            name: `Save to ${state.currentFileName}`,
-            fileLabel: state.currentFileName,
-            description: 'Quick save to current file (Cmd+S)',
-            action: quickSave,
-            isQuickSave: true
-        };
-        if (!searchTerm || qsc.name.toLowerCase().includes(searchTerm.toLowerCase())) {
-            filtered.unshift(qsc);
+    // Build a flat display order grouped by category, plus header markers
+    const entries = [];
+    const flat = [];
+    for (const category of CATEGORY_ORDER) {
+        const inCategory = commands.filter(c => c.category === category && matches(c));
+        if (inCategory.length === 0) continue;
+        entries.push({ header: category });
+        for (const command of inCategory) {
+            entries.push({ command });
+            flat.push(command);
         }
     }
 
-    state.filteredCommandsList = filtered;
+    state.filteredCommandsList = flat;
     state.selectedCommandIndex = 0;
-    renderCommands(filtered);
+    renderCommands(entries);
 }
 
-function renderCommands(filteredCommands) {
+function renderCommands(entries) {
     commandList.innerHTML = '';
     commandList.setAttribute('role', 'listbox');
     commandList.setAttribute('aria-label', 'Commands');
 
-    if (filteredCommands.length === 0) {
+    if (!entries.some(e => e.command)) {
         commandList.innerHTML = '<div class="command-item no-results" role="option">No commands found</div>';
         return;
     }
 
-    filteredCommands.forEach((command, index) => {
+    let index = 0;
+    entries.forEach(entry => {
+        if (entry.header) {
+            const header = document.createElement('div');
+            header.className = 'command-group';
+            header.setAttribute('role', 'presentation');
+            header.textContent = entry.header;
+            commandList.appendChild(header);
+            return;
+        }
+
+        const command = entry.command;
+        const i = index++;
         const item = document.createElement('div');
-        item.className = `command-item ${index === state.selectedCommandIndex ? 'selected' : ''}`;
+        item.className = `command-item ${i === state.selectedCommandIndex ? 'selected' : ''}`;
         item.setAttribute('role', 'option');
-        item.setAttribute('aria-selected', index === state.selectedCommandIndex);
+        item.setAttribute('aria-selected', i === state.selectedCommandIndex);
 
         const nameEl = document.createElement('div');
         nameEl.className = 'command-name';
-        if (command.isQuickSave) {
-            nameEl.textContent = 'Save to ';
-            const em = document.createElement('em');
-            em.style.cssText = 'font-style: italic; opacity: 0.75;';
-            em.textContent = command.fileLabel;
-            nameEl.appendChild(em);
-        } else {
-            nameEl.textContent = command.name;
-        }
+        nameEl.textContent = command.name;
 
         const descEl = document.createElement('div');
         descEl.className = 'command-description';
@@ -595,6 +612,55 @@ function renderCommands(filteredCommands) {
         item.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); executeCommand(command); });
         commandList.appendChild(item);
     });
+}
+
+// Save-state line + active-mode pills at the top of the palette
+function renderStatusHeader() {
+    modeStatus.innerHTML = '';
+    let shown = false;
+
+    if (state.saveStatus !== 'hidden') {
+        const line = document.createElement('div');
+        line.className = `save-line ${state.saveStatus}`;
+        const dot = document.createElement('span');
+        dot.className = 'save-dot';
+        const text = document.createElement('span');
+        if (state.saveStatus === 'detached') text.textContent = 'Not connected to a file';
+        else if (state.saveStatus === 'saving') text.textContent = 'Saving…';
+        else text.textContent = state.currentFileName ? `Saved to ${state.currentFileName}` : 'Saved';
+        line.appendChild(dot);
+        line.appendChild(text);
+        modeStatus.appendChild(line);
+        shown = true;
+    }
+
+    const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+    const modes = [];
+    if (state.currentStage) modes.push(`${cap(state.currentStage)} stage`);
+    if (state.retypeActive) modes.push('Retype');
+    if (state.blindMode) modes.push('Blind');
+    if (state.focusMode) modes.push('Focus');
+    if (state.centerMode) modes.push('Center');
+    if (state.forwardOnlyMode) modes.push('Forward-only');
+    if (state.currentDocumentIsEphemeral) modes.push('Ephemeral');
+    if (document.body.classList.contains('dark-mode')) modes.push('Dark');
+    if (state.wordCountVisible) modes.push('Word count');
+
+    if (modes.length > 0) {
+        const row = document.createElement('div');
+        row.className = 'mode-badges';
+        modes.forEach(m => {
+            const badge = document.createElement('span');
+            badge.className = 'mode-badge';
+            badge.setAttribute('role', 'status');
+            badge.textContent = m;
+            row.appendChild(badge);
+        });
+        modeStatus.appendChild(row);
+        shown = true;
+    }
+
+    modeStatus.style.display = shown ? 'block' : 'none';
 }
 
 function executeCommand(command) {
@@ -610,12 +676,6 @@ function executeCommand(command) {
     recordCheckpoint();
     command.action();
 
-    try {
-        const usage = readJSON('commandUsage', {});
-        usage[command.name] = Date.now();
-        localStorage.setItem('commandUsage', JSON.stringify(usage));
-    } catch (e) {}
-
     editor.focus();
 }
 
@@ -627,28 +687,7 @@ function showCommandModal() {
     filterCommands('');
     state.selectedCommandIndex = 0;
 
-    // Mode status badges
-    const modes = [];
-    if (state.saveStatus === 'detached') modes.push('File disconnected');
-    else if (state.saveStatus === 'saving') modes.push('Saving…');
-    else if (state.saveStatus === 'synced') modes.push('Saved');
-    if (state.currentStage) modes.push(`Stage: ${state.currentStage.charAt(0).toUpperCase()}${state.currentStage.slice(1)}`);
-    if (state.retypeActive) modes.push('Retype');
-    if (state.blindMode) modes.push('Blind');
-    if (state.focusMode) modes.push('Focus');
-    if (state.centerMode) modes.push('Center');
-    if (state.forwardOnlyMode) modes.push('Forward-Only');
-    if (state.currentDocumentIsEphemeral) modes.push('Ephemeral');
-    if (document.body.classList.contains('dark-mode')) modes.push('Dark');
-    if (state.wordCountVisible) modes.push('Word Count');
-
-    if (modes.length > 0) {
-        modeStatus.innerHTML = modes.map(m => `<span class="mode-badge" role="status">${m}</span>`).join('');
-        modeStatus.style.display = 'flex';
-    } else {
-        modeStatus.innerHTML = '';
-        modeStatus.style.display = 'none';
-    }
+    renderStatusHeader();
 
     // Position modal near cursor
     setTimeout(() => {

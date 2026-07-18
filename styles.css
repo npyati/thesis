@@ -326,21 +326,48 @@ body.dark-mode #command-search:-webkit-autofill:focus {
     padding: 8px 12px;
     background: #f8f8f8;
     border-bottom: 1px solid #ddd;
-    display: none; /* Hidden by default, shown by JS when modes are active */
+    display: none; /* Hidden by default, shown as block by JS when relevant */
+}
+
+.save-line {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    color: #555;
+}
+
+.save-line + .mode-badges {
+    margin-top: 8px;
+}
+
+.save-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #bbb;
+    flex-shrink: 0;
+}
+
+.save-line.synced .save-dot { background: #8fbc8f; }
+.save-line.saving .save-dot { background: #d4a94e; }
+.save-line.detached .save-dot { background: #d9534f; }
+
+.mode-badges {
+    display: flex;
     flex-wrap: wrap;
     gap: 6px;
 }
 
 .mode-badge {
     display: inline-block;
-    padding: 3px 10px;
-    background: #4a9eff;
-    color: white;
-    border-radius: 12px;
+    padding: 2px 9px;
+    background: #ececec;
+    color: #555;
+    border-radius: 10px;
     font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.3px;
-    box-shadow: 0 0 8px rgba(74, 158, 255, 0.4);
+    font-weight: 500;
+    letter-spacing: 0.2px;
 }
 
 body.dark-mode #mode-status {
@@ -348,14 +375,36 @@ body.dark-mode #mode-status {
     border-bottom: 1px solid #555;
 }
 
+body.dark-mode .save-line {
+    color: #bbb;
+}
+
 body.dark-mode .mode-badge {
-    background: #5ba3ff;
-    box-shadow: 0 0 8px rgba(91, 163, 255, 0.5);
+    background: #4a4a4a;
+    color: #d0d0d0;
 }
 
 #command-list {
     overflow-y: auto;
     max-height: 350px;
+}
+
+.command-group {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: #aaa;
+    padding: 10px 16px 4px;
+    background: #fff;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+
+body.dark-mode .command-group {
+    color: #888;
+    background: #2d2d2d;
 }
 
 .command-item {
