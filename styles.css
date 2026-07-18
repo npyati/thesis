@@ -494,9 +494,6 @@ body.focus-mode #editor .block.focus-active {
     color: #333;
 }
 
-#save-name-input,
-#load-search,
-#delete-search,
 #font-search,
 #heading-search {
     width: 100%;
@@ -510,9 +507,6 @@ body.focus-mode #editor .block.focus-active {
     background: #fff;
 }
 
-#save-name-input:focus,
-#load-search:focus,
-#delete-search:focus,
 #font-search:focus,
 #heading-search:focus {
     border-color: #4a90e2;
@@ -548,50 +542,6 @@ body.focus-mode #editor .block.focus-active {
     background-color: #357abd;
 }
 
-.document-list {
-    max-height: 300px;
-    overflow-y: auto;
-    margin-bottom: 16px;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-}
-
-.document-item {
-    padding: 12px 16px;
-    cursor: pointer;
-    border-bottom: 1px solid #f0f0f0;
-    transition: background-color 0.15s ease;
-}
-
-.document-item:last-child {
-    border-bottom: none;
-}
-
-.document-item:hover {
-    background-color: #f5f5f5;
-}
-
-.document-item.selected {
-    background-color: #e8f4fd;
-}
-
-.document-item-name {
-    font-weight: 600;
-    font-size: 14px;
-    margin-bottom: 4px;
-}
-
-.document-item-date {
-    font-size: 12px;
-    color: #666;
-}
-
-.no-documents {
-    padding: 20px;
-    text-align: center;
-    color: #999;
-}
-
 /* Dark mode for modals */
 body.dark-mode .modal-content {
     background: #2d2d2d;
@@ -602,9 +552,6 @@ body.dark-mode .modal-content h3 {
     color: #e0e0e0;
 }
 
-body.dark-mode #save-name-input,
-body.dark-mode #load-search,
-body.dark-mode #delete-search,
 body.dark-mode #font-search,
 body.dark-mode #heading-search,
 body.dark-mode #ephemeral-limit-input {
@@ -631,27 +578,6 @@ body.dark-mode .modal-button.primary {
 
 body.dark-mode .modal-button.primary:hover {
     background-color: #357abd;
-}
-
-body.dark-mode .document-list {
-    border-color: #555;
-    background: #2d2d2d;
-}
-
-body.dark-mode .document-item {
-    border-bottom-color: #444;
-}
-
-body.dark-mode .document-item:hover {
-    background-color: #3d3d3d;
-}
-
-body.dark-mode .document-item.selected {
-    background-color: #4d4d4d;
-}
-
-body.dark-mode .document-item-date {
-    color: #999;
 }
 
 /* Font list styling */

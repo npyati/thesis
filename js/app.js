@@ -1,25 +1,21 @@
 // Main application entry point — wires modules together, sets up event listeners
 
 import state from './state.js';
-import { debounce } from './utils.js';
+import { debounce, readJSON, restoreSelection } from './utils.js';
 import { getEditor, getCurrentBlock, getSelectedBlocks, createBlockElement, updateNumberedBlocks, focusBlock } from './blocks.js';
-import { openModal, closeModal, closeOnClickOutside, attachModalKeyboardNav, showAlert, showConfirm } from './modals.js';
+import { openModal, closeModal, closeOnClickOutside, attachModalKeyboardNav, showAlert } from './modals.js';
 import { applyFormatting, strikethroughLastWord, deleteAllStrikethrough } from './formatting.js';
 import {
     toggleForwardOnlyMode, toggleCenterMode, toggleFocusMode, toggleDarkMode,
-    togglePageStyle, toggleFullscreen, addCenterModeSpacers, removeCenterModeSpacers,
+    togglePageStyle, toggleFullscreen, addCenterModeSpacers,
     centerCurrentBlock, updateFocusParagraph, debouncedUpdateFocusParagraph,
-    createNewEphemeralDocument, enforceEphemeralLimit, applyEphemeralFading,
-    clearEphemeralFading, updateURL, clearURL, getDocIdFromURL,
-    updatePageTitle, clearPageTitle,
+    createNewEphemeralDocument, enforceEphemeralLimit,
 } from './modes.js';
 import {
-    loadContent, autoSave, saveContent, saveToFile, saveToNewFile,
-    importFromMarkdown, exportAsMarkdown, exportAllAsMarkdown, exportAsWord,
-    copyAll, copyAsMarkdown, clearAll, clearStorage,
-    getSavedDocuments, setSavedDocuments, performSave, quickSave,
-    loadDocumentByName, loadDocumentById, deleteDocumentByName,
-    migrateDocumentsWithIds, markdownToBlocks, restoreFileHandle,
+    loadContent, autoSave, saveToNewFile,
+    importFromMarkdown, exportAsMarkdown, exportAsWord,
+    copyAll, copyAsMarkdown, clearAll, clearStorage, quickSave,
+    markdownToBlocks, restoreFileHandle,
 } from './io.js';
 
 const editor = getEditor();
@@ -53,7 +49,7 @@ function isFontAvailable(fontName) {
     return detected;
 }
 
-function loadCustomFonts() { const saved = localStorage.getItem('customFonts'); if (saved) state.customFonts = JSON.parse(saved); }
+function loadCustomFonts() { state.customFonts = readJSON('customFonts', []); }
 function saveCustomFonts() { localStorage.setItem('customFonts', JSON.stringify(state.customFonts)); }
 function addCustomFont(fontName) {
     if (!fontName || getAllFonts().some(f => f.toLowerCase() === fontName.toLowerCase())) return false;
@@ -181,63 +177,6 @@ function openFontModal() {
 function closeFontModal() { closeModal(document.getElementById('font-modal')); }
 
 // ──────────────────────────────────
-// Document list rendering (shared pattern)
-// ──────────────────────────────────
-function renderDocList(listEl, docs, selectedIndex, onClick) {
-    listEl.innerHTML = '';
-    if (docs.length === 0) { listEl.innerHTML = '<div class="no-documents">No documents found</div>'; return; }
-    docs.forEach((doc, i) => {
-        const item = document.createElement('div');
-        item.className = `document-item ${i === selectedIndex ? 'selected' : ''}`;
-        item.setAttribute('role', 'option');
-        const name = document.createElement('div');
-        name.className = 'document-item-name';
-        name.textContent = doc.name;
-        const date = document.createElement('div');
-        date.className = 'document-item-date';
-        date.textContent = new Date(doc.timestamp).toLocaleString();
-        item.appendChild(name);
-        item.appendChild(date);
-        item.addEventListener('click', () => onClick(doc));
-        listEl.appendChild(item);
-    });
-}
-
-// ──────────────────────────────────
-// Save / Load / Delete document modals
-// ──────────────────────────────────
-function saveDocumentAs() {
-    const modal = document.getElementById('save-modal');
-    const input = document.getElementById('save-name-input');
-    input.value = '';
-    state.selectedSaveIndex = 0;
-    renderDocList(document.getElementById('save-list'), getSavedDocuments(), 0, (doc) => { input.value = doc.name; input.focus(); });
-    openModal(modal, input);
-}
-
-function loadDocument() {
-    const docs = getSavedDocuments();
-    if (docs.length === 0) { showAlert('No saved documents found.'); return; }
-    const modal = document.getElementById('load-modal');
-    const search = document.getElementById('load-search');
-    search.value = '';
-    state.selectedLoadIndex = 0;
-    renderDocList(document.getElementById('load-list'), docs, 0, (doc) => loadDocumentByName(doc.name));
-    openModal(modal, search);
-}
-
-function deleteDocument() {
-    const docs = getSavedDocuments();
-    if (docs.length === 0) { showAlert('No saved documents found.'); return; }
-    const modal = document.getElementById('delete-modal');
-    const search = document.getElementById('delete-search');
-    search.value = '';
-    state.selectedDeleteIndex = 0;
-    renderDocList(document.getElementById('delete-list'), docs, 0, (doc) => deleteDocumentByName(doc.name));
-    openModal(modal, search);
-}
-
-// ──────────────────────────────────
 // Ephemeral word limit change
 // ──────────────────────────────────
 async function changeEphemeralWordLimit() {
@@ -288,7 +227,7 @@ async function changeEphemeralWordLimit() {
             }
             state.EPHEMERAL_WORD_LIMIT = parsedLimit;
             localStorage.setItem('ephemeralWordLimit', parsedLimit);
-            if (state.currentDocumentIsEphemeral) { updateWordCount(); applyEphemeralFading(); }
+            if (state.currentDocumentIsEphemeral) updateWordCount();
             dialogModal.classList.add('hidden'); cleanup(); restoreCursor();
             await showAlert(`Ephemeral word limit changed to ${parsedLimit} words.`);
             resolve();
@@ -428,10 +367,7 @@ function showIntro() {
 // Commands
 // ──────────────────────────────────
 const commands = [
-    { name: 'Save', description: 'Save to current location (file or browser)', action: async () => { const result = await quickSave(); if (result === 'open-save-dialog') saveDocumentAs(); } },
-    { name: 'Save to Browser As...', description: 'Save to browser storage with a name', action: saveDocumentAs },
-    { name: 'Load from Browser', description: 'Load a document from browser storage', action: loadDocument },
-    { name: 'Delete Document', description: 'Delete a saved document', action: deleteDocument },
+    { name: 'Save', description: 'Save to the current file (or choose one)', action: quickSave },
     { name: 'New Ephemeral Document', description: 'Write in pure flow - oldest words fade away as new thoughts emerge', action: () => createNewEphemeralDocument(autoSave) },
     { name: 'Change Ephemeral Word Limit', description: 'Set how many words linger before fading into the past', action: changeEphemeralWordLimit },
     { name: 'Jump to Heading', description: 'Navigate to a heading in the document', action: openHeadingModal },
@@ -459,13 +395,13 @@ const commands = [
     { name: 'New Document', description: 'Start a new document', action: clearAll },
     { name: 'Copy All', description: 'Copy all content to clipboard', action: copyAll },
     { name: 'Export as Word', description: 'Download content as Word (.docx) file', action: exportAsWord },
-    { name: 'Export All as Markdown', description: 'Download all saved documents as .md files in a ZIP', action: exportAllAsMarkdown },
+    { name: 'Export as Markdown', description: 'Download a copy as a .md file', action: exportAsMarkdown },
     { name: 'Copy as Markdown', description: 'Copy content as Markdown to clipboard', action: copyAsMarkdown },
     { name: 'Open File', description: 'Open and auto-sync with a .md file on disk', action: importFromMarkdown },
     { name: 'Save to File As...', description: 'Save and auto-sync to a .md file on disk', action: saveToNewFile },
     { name: 'Delete Block', description: 'Delete current block or selected blocks', action: deleteBlocks },
     { name: 'Show Intro', description: 'What is this?', action: showIntro },
-    { name: 'Clear Storage', description: 'Clear auto-save from browser memory', action: clearStorage },
+    { name: 'Clear Storage', description: 'Clear the autosaved draft from browser memory', action: clearStorage },
     { name: 'Install App', description: 'Install thesis as a standalone app (no browser chrome)', action: installApp },
 ];
 
@@ -478,21 +414,22 @@ const commandList = document.getElementById('command-list');
 const modeStatus = document.getElementById('mode-status');
 
 function filterCommands(searchTerm) {
-    const commandUsage = JSON.parse(localStorage.getItem('commandUsage') || '{}');
+    const commandUsage = readJSON('commandUsage', {});
     const filtered = commands.filter(cmd =>
         cmd.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
         cmd.description.toLowerCase().includes(searchTerm.toLowerCase())
     );
     filtered.sort((a, b) => (commandUsage[b.name] || 0) - (commandUsage[a.name] || 0));
 
-    if (state.currentDocumentName) {
+    if (state.currentFileName) {
         const qsc = {
-            name: `Save to <em style="font-style: italic; opacity: 0.75;">${state.currentDocumentName}</em>`,
-            description: 'Quick save to current document (Cmd+S)',
-            action: async () => { const result = await quickSave(); if (result === 'open-save-dialog') saveDocumentAs(); },
+            name: `Save to ${state.currentFileName}`,
+            fileLabel: state.currentFileName,
+            description: 'Quick save to current file (Cmd+S)',
+            action: quickSave,
             isQuickSave: true
         };
-        if (!searchTerm || `save to ${state.currentDocumentName}`.toLowerCase().includes(searchTerm.toLowerCase())) {
+        if (!searchTerm || qsc.name.toLowerCase().includes(searchTerm.toLowerCase())) {
             filtered.unshift(qsc);
         }
     }
@@ -520,8 +457,15 @@ function renderCommands(filteredCommands) {
 
         const nameEl = document.createElement('div');
         nameEl.className = 'command-name';
-        if (command.isQuickSave) nameEl.innerHTML = command.name;
-        else nameEl.textContent = command.name;
+        if (command.isQuickSave) {
+            nameEl.textContent = 'Save to ';
+            const em = document.createElement('em');
+            em.style.cssText = 'font-style: italic; opacity: 0.75;';
+            em.textContent = command.fileLabel;
+            nameEl.appendChild(em);
+        } else {
+            nameEl.textContent = command.name;
+        }
 
         const descEl = document.createElement('div');
         descEl.className = 'command-description';
@@ -536,8 +480,8 @@ function renderCommands(filteredCommands) {
 
 function executeCommand(command) {
     if (state.savedSelection) {
-        try { const s = window.getSelection(); s.removeAllRanges(); s.addRange(state.savedSelection); state.savedSelection = null; }
-        catch (e) { console.error('Error restoring cursor:', e); }
+        restoreSelection(state.savedSelection);
+        state.savedSelection = null;
     }
     state.slashPosition = null;
     state.commandModalOpen = false;
@@ -547,7 +491,7 @@ function executeCommand(command) {
     command.action();
 
     try {
-        const usage = JSON.parse(localStorage.getItem('commandUsage') || '{}');
+        const usage = readJSON('commandUsage', {});
         usage[command.name] = Date.now();
         localStorage.setItem('commandUsage', JSON.stringify(usage));
     } catch (e) {}
@@ -633,9 +577,11 @@ function hideCommandModal() {
     state.multiBlockSelection = [];
 
     if (state.savedSelection) {
-        try { const s = window.getSelection(); s.removeAllRanges(); s.addRange(state.savedSelection); state.savedSelection = null; }
-        catch (e) { editor.focus(); }
-    } else { editor.focus(); }
+        if (!restoreSelection(state.savedSelection)) editor.focus();
+        state.savedSelection = null;
+    } else {
+        editor.focus();
+    }
 }
 
 // ──────────────────────────────────
@@ -773,8 +719,11 @@ editor.addEventListener('keydown', (event) => {
         const afterRange = range.cloneRange();
         afterRange.selectNodeContents(ce);
         afterRange.setStart(range.startContainer, range.startOffset);
-        const afterContent = afterRange.toString();
-        afterRange.deleteContents();
+        // Extract as a fragment so inline formatting survives the split
+        const fragment = afterRange.extractContents();
+        const temp = document.createElement('div');
+        temp.appendChild(fragment);
+        const afterContent = temp.innerHTML;
         if (ce.childNodes.length === 0) ce.innerHTML = '<br>';
 
         const newType = (type === 'bullet' || type === 'numbered') ? type : 'text';
@@ -796,31 +745,39 @@ editor.addEventListener('keydown', (event) => {
         if (allBlocks.length === 1 && (!ce.textContent || ce.textContent.trim() === '')) { event.preventDefault(); return; }
 
         const range = sel.getRangeAt(0);
-        if (range.startOffset === 0 && range.startContainer === ce.firstChild) {
+        // At block start: offset 0 and no earlier siblings anywhere up to the content root
+        const isAtBlockStart = () => {
+            if (range.startOffset !== 0) return false;
+            let node = range.startContainer;
+            while (node && node !== ce) {
+                if (node.previousSibling) return false;
+                node = node.parentNode;
+            }
+            return node === ce;
+        };
+        if (isAtBlockStart()) {
             event.preventDefault();
             const prev = cb.previousElementSibling;
-            if (!prev) return;
+            if (!prev || !prev.classList.contains('block')) return;
             const pce = prev.querySelector('.block-content'); if (!pce) return;
-            const prevLen = pce.textContent?.length || 0;
             if (pce.lastChild && pce.lastChild.nodeName === 'BR') pce.removeChild(pce.lastChild);
-            const cc = ce.textContent || '';
-            if (cc.length > 0) pce.appendChild(document.createTextNode(cc));
+
+            // Move child nodes across so inline formatting survives the merge
+            const anchor = pce.lastChild;
+            while (ce.firstChild) {
+                if (ce.firstChild.nodeName === 'BR') { ce.removeChild(ce.firstChild); continue; }
+                pce.appendChild(ce.firstChild);
+            }
             cb.remove();
+            if (pce.childNodes.length === 0) pce.innerHTML = '<br>';
             updateNumberedBlocks();
 
-            requestAnimationFrame(() => {
-                let targetNode = null, targetOffset = prevLen, currentOffset = 0;
-                for (const child of pce.childNodes) {
-                    if (child.nodeType === Node.TEXT_NODE) {
-                        const nl = child.textContent.length;
-                        if (currentOffset + nl >= prevLen) { targetNode = child; targetOffset = prevLen - currentOffset; break; }
-                        currentOffset += nl;
-                    }
-                }
-                if (!targetNode) { targetNode = document.createTextNode(''); pce.appendChild(targetNode); targetOffset = 0; }
-                const r = document.createRange(); r.setStart(targetNode, targetOffset); r.collapse(true);
-                sel.removeAllRanges(); sel.addRange(r);
-            });
+            const r = document.createRange();
+            if (anchor && anchor.parentNode === pce) r.setStartAfter(anchor);
+            else r.setStart(pce, 0);
+            r.collapse(true);
+            sel.removeAllRanges(); sel.addRange(r);
+            autoSave();
             return;
         }
     }
@@ -918,15 +875,14 @@ editor.addEventListener('keydown', (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key === '[') { event.preventDefault(); decreaseLineHeight(); return; }
 
     // Cmd+S — save
-    if ((event.metaKey || event.ctrlKey) && event.key === 's') { event.preventDefault(); quickSave().then(r => { if (r === 'open-save-dialog') saveDocumentAs(); }); return; }
+    if ((event.metaKey || event.ctrlKey) && event.key === 's') { event.preventDefault(); quickSave(); return; }
 
     // F11 — fullscreen
     if (event.key === 'F11') { event.preventDefault(); toggleFullscreen(); return; }
 
     // Slash — command modal
     const introModal = document.getElementById('intro-modal');
-    const deletedDocModal = document.getElementById('deleted-doc-modal');
-    if (event.key === '/' && !state.commandModalOpen && introModal.classList.contains('hidden') && deletedDocModal.classList.contains('hidden')) {
+    if (event.key === '/' && !state.commandModalOpen && introModal.classList.contains('hidden')) {
         event.preventDefault();
         event.stopPropagation();
         event.stopImmediatePropagation();
@@ -1095,8 +1051,6 @@ editor.addEventListener('input', (event) => {
     // Enforce ephemeral limit (only on insertions)
     const isDeletion = event.inputType && (event.inputType.startsWith('delete') || event.inputType === 'historyUndo');
     if (!isDeletion) enforceEphemeralLimit();
-
-    applyEphemeralFading();
 });
 
 // Copy handler
@@ -1116,8 +1070,9 @@ editor.addEventListener('copy', (event) => {
         const ce = block.querySelector('.block-content'); if (!ce) return;
         const type = block.dataset.type;
         const level = parseInt(block.dataset.level) || 0;
-        const content = ce.textContent || '';
-        textParts.push(content);
+        // innerHTML preserves inline formatting; textContent for the plain-text flavor
+        const content = ce.innerHTML === '<br>' ? '' : ce.innerHTML;
+        textParts.push(ce.textContent || '');
 
         if (type === 'bullet' || type === 'numbered') {
             const lt = type === 'bullet' ? 'ul' : 'ol';
@@ -1128,6 +1083,13 @@ editor.addEventListener('copy', (event) => {
                 htmlParts.push(`<${lt}>`); listStack.push({ type: lt, level });
             } else if (listStack.length > 0) htmlParts.push('</li>');
             htmlParts.push(`<li>${content}`);
+        } else if (type === 'heading1' || type === 'heading2' || type === 'heading3') {
+            while (listStack.length > 0) { const c = listStack.pop(); htmlParts.push('</li>', `</${c.type}>`); }
+            const h = `h${type.slice(-1)}`;
+            htmlParts.push(`<${h}>${content}</${h}>`);
+        } else if (type === 'quote') {
+            while (listStack.length > 0) { const c = listStack.pop(); htmlParts.push('</li>', `</${c.type}>`); }
+            htmlParts.push(`<blockquote>${content}</blockquote>`);
         } else {
             while (listStack.length > 0) { const c = listStack.pop(); htmlParts.push('</li>', `</${c.type}>`); }
             htmlParts.push(`<p>${content}</p>`);
@@ -1172,7 +1134,7 @@ editor.addEventListener('paste', (event) => {
             updateNumberedBlocks(); focusBlock(blocks[blocks.length - 1], true);
         }
     }
-    centerCurrentBlock(true); enforceEphemeralLimit(); applyEphemeralFading();
+    centerCurrentBlock(true); enforceEphemeralLimit();
 });
 
 // Click / mouse handlers
@@ -1191,7 +1153,7 @@ editor.addEventListener('contextmenu', (event) => { if (state.forwardOnlyMode) e
 // Selection change
 document.addEventListener('selectionchange', () => {
     if (state.centerMode) {
-        const anyModalOpen = ['command-modal', 'save-modal', 'load-modal', 'delete-modal', 'font-modal', 'heading-modal', 'intro-modal', 'dialog-modal', 'deleted-doc-modal']
+        const anyModalOpen = ['command-modal', 'font-modal', 'heading-modal', 'intro-modal', 'dialog-modal']
             .some(id => !document.getElementById(id).classList.contains('hidden'));
         if (anyModalOpen) return;
 
@@ -1218,99 +1180,14 @@ document.addEventListener('selectionchange', () => {
 // ──────────────────────────────────
 // Modal event wiring (using shared helpers)
 // ──────────────────────────────────
-const saveModal = document.getElementById('save-modal');
-const loadModal = document.getElementById('load-modal');
-const deleteModal = document.getElementById('delete-modal');
 const fontModal = document.getElementById('font-modal');
 const headingModal = document.getElementById('heading-modal');
 const introModal = document.getElementById('intro-modal');
-const deletedDocModal = document.getElementById('deleted-doc-modal');
 
 // Close on click outside
-[saveModal, loadModal, deleteModal, fontModal, headingModal].forEach(m => closeOnClickOutside(m));
+[fontModal, headingModal].forEach(m => closeOnClickOutside(m));
 
 introModal.addEventListener('click', (e) => { if (e.target === introModal) { introModal.classList.add('hidden'); editor.focus(); } });
-deletedDocModal.addEventListener('click', (e) => { if (e.target === deletedDocModal) { deletedDocModal.classList.add('hidden'); editor.focus(); } });
-
-// Save modal
-document.getElementById('save-confirm-button').addEventListener('click', performSave);
-document.getElementById('save-name-input').addEventListener('input', () => {
-    const term = document.getElementById('save-name-input').value.toLowerCase();
-    const docs = getSavedDocuments().filter(d => d.name.toLowerCase().includes(term));
-    state.selectedSaveIndex = 0;
-    renderDocList(document.getElementById('save-list'), docs, 0, (doc) => { document.getElementById('save-name-input').value = doc.name; document.getElementById('save-name-input').focus(); });
-});
-document.getElementById('save-cancel-button').addEventListener('click', () => closeModal(saveModal));
-
-attachModalKeyboardNav(document.getElementById('save-name-input'), saveModal, {
-    getItems: () => document.getElementById('save-list').querySelectorAll('.document-item'),
-    getSelectedIndex: () => state.selectedSaveIndex,
-    setSelectedIndex: (i) => { state.selectedSaveIndex = i; },
-    onEnter: () => {
-        if (document.getElementById('save-name-input').value.trim()) performSave();
-        else {
-            const docs = getSavedDocuments();
-            if (docs[state.selectedSaveIndex]) document.getElementById('save-name-input').value = docs[state.selectedSaveIndex].name;
-        }
-    },
-    onFilter: () => {
-        const term = document.getElementById('save-name-input').value.toLowerCase();
-        const docs = getSavedDocuments().filter(d => d.name.toLowerCase().includes(term));
-        renderDocList(document.getElementById('save-list'), docs, state.selectedSaveIndex, (doc) => { document.getElementById('save-name-input').value = doc.name; });
-    },
-});
-
-// Load modal
-document.getElementById('load-cancel-button').addEventListener('click', () => closeModal(loadModal));
-document.getElementById('load-search').addEventListener('input', () => {
-    const term = document.getElementById('load-search').value.toLowerCase();
-    const docs = getSavedDocuments().filter(d => d.name.toLowerCase().includes(term));
-    state.selectedLoadIndex = 0;
-    renderDocList(document.getElementById('load-list'), docs, 0, (doc) => loadDocumentByName(doc.name));
-});
-
-attachModalKeyboardNav(document.getElementById('load-search'), loadModal, {
-    getItems: () => document.getElementById('load-list').querySelectorAll('.document-item'),
-    getSelectedIndex: () => state.selectedLoadIndex,
-    setSelectedIndex: (i) => { state.selectedLoadIndex = i; },
-    onEnter: (idx) => {
-        const term = document.getElementById('load-search').value.toLowerCase();
-        const docs = getSavedDocuments().filter(d => d.name.toLowerCase().includes(term));
-        if (docs.length === 1) loadDocumentByName(docs[0].name);
-        else if (docs[idx]) loadDocumentByName(docs[idx].name);
-    },
-    onFilter: () => {
-        const term = document.getElementById('load-search').value.toLowerCase();
-        const docs = getSavedDocuments().filter(d => d.name.toLowerCase().includes(term));
-        renderDocList(document.getElementById('load-list'), docs, state.selectedLoadIndex, (doc) => loadDocumentByName(doc.name));
-    },
-});
-
-// Delete modal
-document.getElementById('delete-cancel-button').addEventListener('click', () => closeModal(deleteModal));
-document.getElementById('delete-search').addEventListener('input', () => {
-    const term = document.getElementById('delete-search').value.toLowerCase();
-    const docs = getSavedDocuments().filter(d => d.name.toLowerCase().includes(term));
-    state.selectedDeleteIndex = 0;
-    renderDocList(document.getElementById('delete-list'), docs, 0, (doc) => deleteDocumentByName(doc.name));
-});
-
-attachModalKeyboardNav(document.getElementById('delete-search'), deleteModal, {
-    getItems: () => document.getElementById('delete-list').querySelectorAll('.document-item'),
-    getSelectedIndex: () => state.selectedDeleteIndex,
-    setSelectedIndex: (i) => { state.selectedDeleteIndex = i; },
-    onEnter: (idx) => {
-        const term = document.getElementById('delete-search').value.toLowerCase();
-        const docs = getSavedDocuments().filter(d => d.name.toLowerCase().includes(term));
-        if (docs.length === 1) deleteDocumentByName(docs[0].name);
-        else if (docs[idx]) deleteDocumentByName(docs[idx].name);
-    },
-    onFilter: () => {
-        const term = document.getElementById('delete-search').value.toLowerCase();
-        const docs = getSavedDocuments().filter(d => d.name.toLowerCase().includes(term));
-        renderDocList(document.getElementById('delete-list'), docs, state.selectedDeleteIndex, (doc) => deleteDocumentByName(doc.name));
-    },
-});
 
 // Font modal
 document.getElementById('font-cancel-button').addEventListener('click', closeFontModal);
@@ -1362,13 +1239,9 @@ attachModalKeyboardNav(document.getElementById('heading-search'), headingModal, 
     },
 });
 
-// Deleted doc modal
-document.getElementById('deleted-doc-ok-button').addEventListener('click', () => { deletedDocModal.classList.add('hidden'); editor.focus(); });
-
-// Close intro / deleted doc modal on Escape or /
+// Close intro modal on Escape or /
 document.addEventListener('keydown', (event) => {
     if (!introModal.classList.contains('hidden') && (event.key === 'Escape' || event.key === '/')) { event.preventDefault(); introModal.classList.add('hidden'); editor.focus(); }
-    if (!deletedDocModal.classList.contains('hidden') && (event.key === 'Escape' || event.key === '/')) { event.preventDefault(); deletedDocModal.classList.add('hidden'); editor.focus(); }
 });
 
 // File input fallback
@@ -1436,17 +1309,9 @@ const savedLimit = localStorage.getItem('ephemeralWordLimit');
 if (savedLimit) { const p = parseInt(savedLimit, 10); if (!isNaN(p) && p > 0) state.EPHEMERAL_WORD_LIMIT = p; }
 if (localStorage.getItem('wordCountVisible') === 'true') { state.wordCountVisible = true; document.getElementById('word-count-display').classList.remove('hidden'); }
 
-// Load content
+// Load autosaved content, then re-attach the synced file (if any)
 loadContent();
-migrateDocumentsWithIds();
-
-// Check URL for document ID
-const docIdFromURL = getDocIdFromURL();
-if (docIdFromURL) {
-    setTimeout(() => loadDocumentById(docIdFromURL), 50);
-} else {
-    setTimeout(() => restoreFileHandle(), 50);
-}
+setTimeout(() => restoreFileHandle(), 50);
 
 // Show intro on first visit
 if (!localStorage.getItem('hasSeenIntro')) {

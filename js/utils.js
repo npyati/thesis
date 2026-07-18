@@ -9,9 +9,15 @@ export function debounce(fn, wait) {
     };
 }
 
-// Generate a unique document ID
-export function generateDocumentId() {
-    return Date.now().toString(36) + Math.random().toString(36).substring(2, 11);
+// Read and parse a JSON localStorage entry, tolerating corrupt values
+export function readJSON(key, fallback) {
+    try {
+        const raw = localStorage.getItem(key);
+        return raw ? JSON.parse(raw) : fallback;
+    } catch (e) {
+        console.error(`Corrupt localStorage entry "${key}":`, e);
+        return fallback;
+    }
 }
 
 // Generate timestamped filename

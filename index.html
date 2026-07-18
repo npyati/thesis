@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#ffffff">
     <title>thesis</title>
     <link rel="icon" type="image/x-icon" href="favicon.ico">
@@ -15,37 +15,6 @@
         <div id="mode-status" role="status" aria-live="polite"></div>
         <input type="text" id="command-search" placeholder="Search commands..." autocomplete="off" aria-label="Search commands" role="combobox" aria-expanded="true" aria-controls="command-list">
         <div id="command-list" role="listbox" aria-label="Commands"></div>
-    </div>
-    <div id="save-modal" class="hidden modal-overlay" role="dialog" aria-label="Save document">
-        <div class="modal-content">
-            <h3>Save Document</h3>
-            <input type="text" id="save-name-input" placeholder="Enter or select document name..." autocomplete="off">
-            <div id="save-list" class="document-list"></div>
-            <div class="modal-buttons">
-                <button id="save-confirm-button" class="modal-button primary">Save</button>
-                <button id="save-cancel-button" class="modal-button">Cancel</button>
-            </div>
-        </div>
-    </div>
-    <div id="load-modal" class="hidden modal-overlay" role="dialog" aria-label="Load document">
-        <div class="modal-content">
-            <h3>Load Document</h3>
-            <input type="text" id="load-search" placeholder="Search documents..." autocomplete="off">
-            <div id="load-list" class="document-list"></div>
-            <div class="modal-buttons">
-                <button id="load-cancel-button" class="modal-button">Cancel</button>
-            </div>
-        </div>
-    </div>
-    <div id="delete-modal" class="hidden modal-overlay" role="dialog" aria-label="Delete document">
-        <div class="modal-content">
-            <h3>Delete Document</h3>
-            <input type="text" id="delete-search" placeholder="Search documents..." autocomplete="off">
-            <div id="delete-list" class="document-list"></div>
-            <div class="modal-buttons">
-                <button id="delete-cancel-button" class="modal-button">Cancel</button>
-            </div>
-        </div>
     </div>
     <div id="font-modal" class="hidden modal-overlay" role="dialog" aria-label="Select font">
         <div class="modal-content">
@@ -78,14 +47,6 @@
             <div class="modal-buttons">
                 <button id="dialog-confirm-button" class="modal-button primary">OK</button>
                 <button id="dialog-cancel-button" class="modal-button">Cancel</button>
-            </div>
-        </div>
-    </div>
-    <div id="deleted-doc-modal" class="hidden modal-overlay" role="alertdialog" aria-label="Document deleted">
-        <div class="modal-content dialog-content">
-            <div id="deleted-doc-message">This document has been deleted or does not exist.</div>
-            <div class="modal-buttons">
-                <button id="deleted-doc-ok-button" class="modal-button primary">OK</button>
             </div>
         </div>
     </div>
