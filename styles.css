@@ -674,39 +674,6 @@ body.dark-mode #retype-meta {
     color: #666;
 }
 
-/* Save-state indicator */
-#save-status {
-    position: fixed;
-    bottom: 14px;
-    left: 14px;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    opacity: 0.8;
-    z-index: 900;
-}
-
-#save-status.hidden {
-    display: none;
-}
-
-#save-status.synced {
-    background: #8fbc8f;
-}
-
-#save-status.saving {
-    background: #d4a94e;
-    animation: save-pulse 1s ease-in-out infinite;
-}
-
-#save-status.detached {
-    background: #d9534f;
-}
-
-@keyframes save-pulse {
-    50% { opacity: 0.3; }
-}
-
 /* Print */
 @media print {
     body, body.dark-mode {
@@ -731,7 +698,6 @@ body.dark-mode #retype-meta {
     #command-modal,
     #word-count-display,
     #find-bar,
-    #save-status,
     #retype-bar,
     #blind-overlay,
     .modal-overlay,
