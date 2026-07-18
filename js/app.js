@@ -3,7 +3,7 @@
 import state from './state.js';
 import { debounce, readJSON, restoreSelection } from './utils.js';
 import { getEditor, getCurrentBlock, getSelectedBlocks, createBlockElement, updateNumberedBlocks, focusBlock } from './blocks.js';
-import { openModal, closeModal, closeOnClickOutside, attachModalKeyboardNav, showAlert } from './modals.js';
+import { openModal, closeModal, closeOnClickOutside, attachModalKeyboardNav, showAlert, showConfirm } from './modals.js';
 import { applyFormatting, strikethroughLastWord, deleteAllStrikethrough } from './formatting.js';
 import {
     toggleForwardOnlyMode, toggleCenterMode, toggleFocusMode, toggleDarkMode,
@@ -12,7 +12,7 @@ import {
     createNewEphemeralDocument, enforceEphemeralLimit,
     applyStage, toggleSpellcheck, toggleBlindMode, setBlindChar,
 } from './modes.js';
-import { startRetype, retypeNext, retypePrev, endRetype, resumeRetypeIfActive } from './retype.js';
+import { startRetype, retypeNext, retypePrev, endRetype, resumeRetypeIfActive, resumeRetype, recoverLastSource } from './retype.js';
 import {
     loadContent, autoSave, saveToNewFile,
     importFromMarkdown, exportAsMarkdown, exportAsWord,
@@ -480,6 +480,8 @@ const commands = [
     { name: 'Change Ephemeral Word Limit', description: 'Set how many words linger before fading into the past', action: changeEphemeralWordLimit },
     { name: 'Retype Document', description: 'Redraft by retyping — the old draft shows a paragraph at a time while you type it fresh', action: () => startRetype(showAlert) },
     { name: 'End Retype', description: 'Finish retyping and keep the new draft', action: endRetype },
+    { name: 'Resume Retype', description: 'Reopen the retype bar where you left off (undo an accidental ⌘.)', action: () => resumeRetype(showAlert) },
+    { name: 'Recover Last Retype Source', description: 'Load the old draft from your last retype back into the editor', action: () => recoverLastSource(showAlert, showConfirm) },
     { name: 'Toggle Blind Mode', description: 'Write without seeing the words — only the last letter shows', action: toggleBlindMode },
     { name: 'Draft Stage', description: 'Forward-only, focus mode, no spellcheck — just get words out', action: () => applyStage('draft') },
     { name: 'Revise Stage', description: 'Unlock editing and see the whole document', action: () => applyStage('revise') },
