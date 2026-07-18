@@ -432,14 +432,16 @@ body.dark-mode #word-count-display .separator {
     color: #555;
 }
 
-/* Canvas mode - seamless style with same positioning */
-body.canvas-mode #editor {
-    box-shadow: none;
-    background-color: #f5f5f5;
+/* Canvas mode - seamless style with same positioning.
+   The editor goes transparent and the body provides the surface color:
+   white in light mode, unchanged (#1e1e1e) in dark mode. */
+body.canvas-mode:not(.dark-mode) {
+    background-color: #ffffff;
 }
 
-body.canvas-mode.dark-mode #editor {
-    background-color: #1e1e1e;
+body.canvas-mode #editor {
+    box-shadow: none;
+    background-color: transparent;
 }
 
 /* Typewriter mode - disable text selection */
