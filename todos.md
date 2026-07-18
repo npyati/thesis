@@ -11,13 +11,14 @@
 
 ## Feature Ideas (backlog)
 - [ ] Session word delta — show words written this session ("+412") next to the word count. No timers, no pace tracking; just the count.
-- [ ] Retype mode — show the previous draft dimmed/read-only while retyping it fresh (typewriter-era revision technique). Exploring the concept first.
 
 ## Design principles (decided)
 - No timing elements anywhere — clocks and countdowns create stress; word-count-based mechanics only (this is why ephemeral mode uses a word limit, and why time-based fading was rejected)
 - Ephemeral means no record — no compost/recovery files for faded words; the point is writing without a trace
 
 ## Recently Completed
+- [x] Retype mode — old draft shows one paragraph at a time above a fresh document (⌘↓ next, ⌘↑ back, ⌘. finish); skipping a paragraph deletes by omission; original file untouched; survives reload
+- [x] Blind mode (ilys-style) — words invisible while typing, only the last character shows large and faint; editing keys blocked while blind; session-only (never persisted)
 - [x] Stage presets: Draft (forward-only, focus, no spellcheck), Revise (unlocked), Polish (spellcheck on) — manual mode toggles clear the stage label
 - [x] Reliable undo/redo (Cmd+Z / Cmd+Shift+Z) — snapshot-based, covers block operations native undo couldn't; blocked in forward-only mode
 - [x] Find (Cmd+F) — highlights via CSS Custom Highlight API, Enter/arrows to step through matches
