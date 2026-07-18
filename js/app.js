@@ -10,7 +10,7 @@ import {
     togglePageStyle, toggleFullscreen, addCenterModeSpacers,
     centerCurrentBlock, updateFocusParagraph, debouncedUpdateFocusParagraph,
     createNewEphemeralDocument, enforceEphemeralLimit,
-    applyStage, toggleSpellcheck, toggleBlindMode, setBlindChar,
+    applyStage, toggleSpellcheck, toggleBlindMode, updateBlindCount,
     toggleFogMode, updateFogBlock,
 } from './modes.js';
 import { startRetype, retypeNext, retypePrev, endRetype, resumeRetypeIfActive, resumeRetype, recoverLastSource } from './retype.js';
@@ -464,7 +464,7 @@ async function installApp() {
 // ──────────────────────────────────
 // Intro
 // ──────────────────────────────────
-const introHTML = `<p><strong>thesis</strong> is a minimalist text editor, designed for focus and creativity.</p><p>It works through the keyboard — you shouldn't need the mouse. Type <strong>/</strong> to open the command menu, then search or use the arrow keys and press <strong>[enter]</strong>. Type <strong>/</strong> again to close it (press <strong>[space]</strong> at the empty prompt to keep a literal /).</p><p>Your writing saves automatically as you type — you never need to reach for Save. It's kept in this browser, and you can also <em>Open File</em> or <em>Save to File As…</em> to sync a real <strong>.md</strong> file on your computer. Nothing is ever sent online.</p><p>There are a few different ways to write, all in the / menu:</p><ul><li><strong>Stages</strong> — Draft, Revise, and Polish set the editor up for each phase of writing.</li><li><strong>Forward-only</strong> — type like a typewriter, with no going back.</li><li><strong>Blind</strong> — hide your words as you write; only the last letter shows.</li><li><strong>Ephemeral</strong> — the oldest words fade away as new ones arrive, leaving no record.</li><li><strong>Retype</strong> — redraft by retyping your old draft one paragraph at a time.</li><li><strong>Focus &amp; Center</strong> — dim everything but the current line, or keep it centered.</li></ul><p>There's more to find — fonts, dark mode, find, export to Markdown or Word — but that's enough to start. There isn't much here, just what's necessary.</p><p><strong>This is a work in progress.</strong> Send me a note if you have ideas.</p>`;
+const introHTML = `<p><strong>thesis</strong> is a minimalist text editor, designed for focus and creativity.</p><p>It works through the keyboard — you shouldn't need the mouse. Type <strong>/</strong> to open the command menu, then search or use the arrow keys and press <strong>[enter]</strong>. Type <strong>/</strong> again to close it (press <strong>[space]</strong> at the empty prompt to keep a literal /).</p><p>Your writing saves automatically as you type — you never need to reach for Save. It's kept in this browser, and you can also <em>Open File</em> or <em>Save to File As…</em> to sync a real <strong>.md</strong> file on your computer. Nothing is ever sent online.</p><p>There are a few different ways to write, all in the / menu:</p><ul><li><strong>Stages</strong> — Draft, Revise, and Polish set the editor up for each phase of writing.</li><li><strong>Forward-only</strong> — type like a typewriter, with no going back.</li><li><strong>Blind</strong> — write without seeing anything; a running word count keeps you company.</li><li><strong>Ephemeral</strong> — the oldest words fade away as new ones arrive, leaving no record.</li><li><strong>Retype</strong> — redraft by retyping your old draft one paragraph at a time.</li><li><strong>Focus</strong> — fade or blur everything but the line you're on, or keep it centered.</li></ul><p>There's more to find — fonts, dark mode, find, export to Markdown or Word — but that's enough to start. There isn't much here, just what's necessary.</p><p><strong>This is a work in progress.</strong> Send me a note if you have ideas.</p>`;
 
 function showIntro() {
     document.getElementById('intro-text').innerHTML = introHTML;
@@ -494,8 +494,7 @@ const commands = [
     { name: 'Resume Retype', description: 'Reopen the retype bar where you left off (undo an accidental ⌘.)', action: () => resumeRetype(showAlert), category: 'Write' },
     { name: 'Recover Last Retype Source', description: 'Load the old draft from your last retype back into the editor', action: () => recoverLastSource(showAlert, showConfirm), category: 'Write' },
     { name: 'End Retype', description: 'Finish retyping and keep the new draft', action: endRetype, category: 'Write' },
-    { name: 'Toggle Fog Mode', description: 'Finished text blurs to a smudge; the line you\'re writing stays sharp', action: toggleFogMode, category: 'Write' },
-    { name: 'Toggle Blind Mode', description: 'Write without seeing the words — only the last letter shows', action: toggleBlindMode, category: 'Write' },
+    { name: 'Toggle Blind Mode', description: 'Write without seeing anything — a running word count keeps you company', action: toggleBlindMode, category: 'Write' },
     { name: 'Toggle Forward-Only Mode', description: 'Prevent backspace, deletion, and cursor movement', action: toggleForwardOnlyMode, category: 'Write' },
     { name: 'Change Ephemeral Word Limit', description: 'Set how many words linger before fading into the past', action: changeEphemeralWordLimit, category: 'Write' },
 
@@ -516,7 +515,8 @@ const commands = [
     { name: 'Jump to Heading', description: 'Navigate to a heading in the document', action: openHeadingModal, category: 'Navigate' },
 
     // View
-    { name: 'Toggle Focus Mode', description: 'Fade non-active paragraphs', action: toggleFocusMode, category: 'View' },
+    { name: 'Toggle Fade Focus', description: 'Fade the paragraphs around the one you\'re on', action: toggleFocusMode, category: 'View' },
+    { name: 'Toggle Fog Focus', description: 'Blur everything but the line you\'re writing', action: toggleFogMode, category: 'View' },
     { name: 'Toggle Center Mode', description: 'Keep active line centered in viewport', action: toggleCenterMode, category: 'View' },
     { name: 'Toggle Page Style', description: 'Switch between page and canvas view', action: togglePageStyle, category: 'View' },
     { name: 'Toggle Dark Mode', description: 'Switch between light and dark theme', action: toggleDarkMode, category: 'View' },
@@ -641,8 +641,8 @@ function renderStatusHeader() {
     if (state.currentStage) modes.push(`${cap(state.currentStage)} stage`);
     if (state.retypeActive) modes.push('Retype');
     if (state.blindMode) modes.push('Blind');
-    if (state.fogMode) modes.push('Fog');
-    if (state.focusMode) modes.push('Focus');
+    if (state.focusMode) modes.push('Fade focus');
+    if (state.fogMode) modes.push('Fog focus');
     if (state.centerMode) modes.push('Center');
     if (state.forwardOnlyMode) modes.push('Forward-only');
     if (state.currentDocumentIsEphemeral) modes.push('Ephemeral');
@@ -881,7 +881,6 @@ editor.addEventListener('keydown', (event) => {
         const cb = getCurrentBlock(); if (!cb) return;
         const ce = cb.querySelector('.block-content'); if (!ce) return;
         recordCheckpoint();
-        if (state.blindMode) setBlindChar('¶');
         const tc = ce.textContent || '';
         const type = cb.dataset.type;
 
@@ -1198,7 +1197,7 @@ editor.addEventListener('beforeinput', (event) => {
 // Editor input handler
 editor.addEventListener('input', (event) => {
     scheduleCheckpoint();
-    if (state.blindMode && event.data) setBlindChar(event.data);
+    if (state.blindMode) updateBlindCount();
     if (!document.getElementById('find-bar').classList.contains('hidden')) closeFindBar(false);
 
     // Strikethrough trigger (xxxx)

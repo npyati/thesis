@@ -1,3 +1,23 @@
+/* Window Controls Overlay: drag strip for the frameless installed app.
+   Hidden by default; only active when the OS draws the app without a title bar. */
+#titlebar {
+    display: none;
+}
+
+@media (display-mode: window-controls-overlay) {
+    #titlebar {
+        display: block;
+        position: fixed;
+        top: env(titlebar-area-y, 0);
+        left: env(titlebar-area-x, 0);
+        width: env(titlebar-area-width, 100%);
+        height: env(titlebar-area-height, 33px);
+        -webkit-app-region: drag;
+        app-region: drag;
+        z-index: 900; /* above editor, below modals/find-bar (1000) */
+    }
+}
+
 body {
     margin: 0;
     font-family: 'Helvetica', Arial, sans-serif;
@@ -646,26 +666,35 @@ body.blind-mode #editor {
     display: none;
 }
 
-#blind-char {
-    font-size: 110px;
+#blind-readout {
+    text-align: center;
     color: #333;
-    opacity: 0.12;
+    opacity: 0.16;
+    user-select: none;
 }
 
-#blind-char.pulse {
-    animation: blind-fade 900ms ease-out forwards;
+#blind-words {
+    font-size: 96px;
+    font-weight: 600;
+    line-height: 1;
 }
 
-@keyframes blind-fade {
-    from { opacity: 0.55; }
-    to { opacity: 0.12; }
+#blind-sub {
+    font-size: 20px;
+    letter-spacing: 3px;
+    margin-top: 2px;
 }
 
-body.dark-mode #blind-char {
+#blind-chars {
+    font-size: 15px;
+    margin-top: 12px;
+}
+
+body.dark-mode #blind-readout {
     color: #e0e0e0;
 }
 
-/* Fog mode — finished text blurs into an unreadable smudge; the block you're
+/* Fog focus — finished text blurs into an unreadable smudge; the block you're
    writing stays sharp. */
 body.fog-mode .block-content {
     color: transparent;
