@@ -1,30 +1,31 @@
-// File I/O, document persistence, markdown conversion, import/export
+// File I/O, autosave persistence, markdown conversion, import/export
 
 import state from './state.js';
 import { getEditor, createBlockElement, updateNumberedBlocks, focusBlock } from './blocks.js';
-import { saveFileHandleToDB, loadFileHandleFromDB, clearFileHandleFromDB } from './db.js';
-import { generateDocumentId, generateTimestampedFilename } from './utils.js';
+import { saveFileHandleToDB, loadFileHandleFromDB, clearFileHandleFromDB, addRecentFile, removeRecentFile } from './db.js';
+import { generateTimestampedFilename } from './utils.js';
 import { sanitizeHTML } from './sanitize.js';
 import { showAlert, showConfirm } from './modals.js';
+import { resetHistory } from './history.js';
 import {
-    updateURL, clearURL, updatePageTitle, clearPageTitle,
-    addCenterModeSpacers, centerCurrentBlock, clearEphemeralFading, applyEphemeralFading,
+    updatePageTitle, clearPageTitle,
+    addCenterModeSpacers, centerCurrentBlock,
 } from './modes.js';
 
 // ──────────────────────────────────
 // Auto-save with debouncing
 // ──────────────────────────────────
 export function saveContent() {
-    const editor = getEditor();
-    const content = editor.innerHTML;
+    // Serialize without center-mode spacers so they never leak into stored content
+    const clone = getEditor().cloneNode(true);
+    clone.querySelectorAll('[data-spacer]').forEach(spacer => spacer.remove());
     try {
         const saveData = {
-            content: content,
+            content: clone.innerHTML,
             isEphemeral: state.currentDocumentIsEphemeral,
         };
         localStorage.setItem('editorContent', JSON.stringify(saveData));
     } catch (e) {
-        // localStorage quota exceeded
         console.error('Failed to save: storage quota exceeded', e);
     }
 }
@@ -49,7 +50,6 @@ export function loadContent() {
     if (savedData) {
         try {
             const parsed = JSON.parse(savedData);
-            // BUG FIX: sanitize HTML before injecting into DOM
             editor.innerHTML = sanitizeHTML(parsed.content);
             state.currentDocumentIsEphemeral = parsed.isEphemeral || false;
         } catch (e) {
@@ -120,27 +120,46 @@ export function loadContent() {
             requestAnimationFrame(() => centerCurrentBlock(true));
         });
     }
+}
 
-    applyEphemeralFading();
+// ──────────────────────────────────
+// Save-state — surfaced in the command palette, not on the canvas
+// ──────────────────────────────────
+export function setSaveStatus(status) { // 'synced' | 'saving' | 'detached' | 'hidden'
+    state.saveStatus = status;
 }
 
 // ──────────────────────────────────
 // File operations
 // ──────────────────────────────────
 export async function saveToFile() {
-    if (!state.currentFileHandle) return;
+    if (!state.currentFileHandle) return false;
     try {
+        setSaveStatus('saving');
         const markdown = blocksToMarkdown();
         const writable = await state.currentFileHandle.createWritable();
         await writable.write(markdown);
         await writable.close();
+        setSaveStatus('synced');
+        return true;
     } catch (error) {
         console.error('Error saving to file:', error);
         if (error.name === 'NotAllowedError') {
             state.currentFileHandle = null;
             state.currentFileName = null;
             clearPageTitle();
+            setSaveStatus('detached');
+            showAlert('The connection to your file was lost (permission revoked). Your draft is still autosaved in the browser — use Save to reattach it to a file.');
         }
+        return false;
+    }
+}
+
+// A successful save makes the document permanent
+function markSavedPermanent() {
+    if (state.currentDocumentIsEphemeral) {
+        state.currentDocumentIsEphemeral = false;
+        saveContent();
     }
 }
 
@@ -161,15 +180,53 @@ export async function saveToNewFile() {
             state.currentFileHandle = fileHandle;
             state.currentFileName = file.name;
             await saveFileHandleToDB(fileHandle, file.name);
-
-            state.currentDocumentName = null;
-            clearURL();
+            await addRecentFile(fileHandle, file.name);
             updatePageTitle(file.name);
+            setSaveStatus('synced');
+            markSavedPermanent();
         } else {
             exportAsMarkdown();
         }
     } catch (error) {
         if (error.name !== 'AbortError') console.error('Error saving file:', error);
+    }
+}
+
+export async function quickSave() {
+    if (state.currentFileHandle) {
+        if (await saveToFile()) markSavedPermanent();
+        return;
+    }
+    await saveToNewFile();
+}
+
+async function loadFileIntoEditor(fileHandle, fileName = null) {
+    const file = await fileHandle.getFile();
+    const markdownContent = await file.text();
+    const blocks = markdownToBlocks(markdownContent);
+
+    const editor = getEditor();
+    editor.innerHTML = '';
+    blocks.forEach(block => editor.appendChild(block));
+    updateNumberedBlocks();
+
+    state.currentFileHandle = fileHandle;
+    state.currentFileName = fileName || file.name;
+    state.currentDocumentIsEphemeral = false;
+    updatePageTitle(state.currentFileName);
+    setSaveStatus('synced');
+    saveContent();
+    await addRecentFile(fileHandle, state.currentFileName);
+    resetHistory();
+
+    const firstBlock = editor.querySelector('.block');
+    if (firstBlock) focusBlock(firstBlock);
+
+    if (state.centerMode) {
+        requestAnimationFrame(() => {
+            addCenterModeSpacers();
+            requestAnimationFrame(() => centerCurrentBlock(true));
+        });
     }
 }
 
@@ -180,26 +237,8 @@ export async function importFromMarkdown() {
                 types: [{ description: 'Markdown Files', accept: { 'text/markdown': ['.md', '.markdown'] } }],
                 multiple: false
             });
-
-            const file = await fileHandle.getFile();
-            const markdownContent = await file.text();
-            const blocks = markdownToBlocks(markdownContent);
-
-            const editor = getEditor();
-            editor.innerHTML = '';
-            blocks.forEach(block => editor.appendChild(block));
-            updateNumberedBlocks();
-
-            state.currentFileHandle = fileHandle;
-            state.currentFileName = file.name;
-            // BUG FIX: clear ephemeral flag when loading from file
-            state.currentDocumentIsEphemeral = false;
-            clearEphemeralFading();
-
-            await saveFileHandleToDB(fileHandle, file.name);
-            state.currentDocumentName = null;
-            clearURL();
-            updatePageTitle(file.name);
+            await loadFileIntoEditor(fileHandle);
+            await saveFileHandleToDB(fileHandle, state.currentFileName);
         } else {
             document.getElementById('markdown-file-input').click();
         }
@@ -208,235 +247,17 @@ export async function importFromMarkdown() {
     }
 }
 
-// ──────────────────────────────────
-// Document management (localStorage)
-// ──────────────────────────────────
-export function getSavedDocuments() {
-    const docsJson = localStorage.getItem('savedDocuments');
-    const docs = docsJson ? JSON.parse(docsJson) : [];
-    docs.sort((a, b) => b.timestamp - a.timestamp);
-    return docs;
-}
-
-export function setSavedDocuments(docs) {
-    localStorage.setItem('savedDocuments', JSON.stringify(docs));
-}
-
-export function performSave() {
-    const docName = document.getElementById('save-name-input').value.trim();
-    if (!docName) return;
-
-    // BUG FIX: saving always makes document permanent
-    state.currentDocumentIsEphemeral = false;
-    clearEphemeralFading();
-
-    const editor = getEditor();
-    const content = editor.innerHTML;
-    const docs = getSavedDocuments();
-
-    let docId;
-    const existingIndex = docs.findIndex(d => d.name === docName);
-    if (existingIndex >= 0) {
-        docs[existingIndex].timestamp = Date.now();
-        docs[existingIndex].isEphemeral = false;
-        docId = docs[existingIndex].id;
-    } else {
-        docId = generateDocumentId();
-        docs.push({ id: docId, name: docName, timestamp: Date.now(), isEphemeral: false });
-    }
-
-    try {
-        localStorage.setItem(`doc_${docName}`, content);
-        localStorage.setItem(`docById_${docId}`, JSON.stringify({ name: docName, content, isEphemeral: false }));
-    } catch (e) {
-        console.error('Failed to save: storage quota exceeded', e);
-    }
-    setSavedDocuments(docs);
-    state.currentDocumentName = docName;
-
-    updateURL(docId);
-    updatePageTitle(docName);
-
-    document.getElementById('save-modal').classList.add('hidden');
-
-    // Restore cursor
-    if (state.savedSelection) {
-        const selection = window.getSelection();
-        try {
-            selection.removeAllRanges();
-            selection.addRange(state.savedSelection);
-        } catch (e) {
-            editor.focus();
-        }
-        state.savedSelection = null;
-    } else {
-        editor.focus();
-    }
-}
-
-export async function quickSave() {
-    // BUG FIX: saving always makes document permanent
-    state.currentDocumentIsEphemeral = false;
-    clearEphemeralFading();
-
-    if (state.currentFileHandle) {
-        await saveToFile();
-        return;
-    }
-
-    if (state.currentDocumentName) {
-        const editor = getEditor();
-        const content = editor.innerHTML;
-        const docs = getSavedDocuments();
-
-        const existingIndex = docs.findIndex(d => d.name === state.currentDocumentName);
-        if (existingIndex >= 0) {
-            docs[existingIndex].timestamp = Date.now();
-            docs[existingIndex].isEphemeral = false;
-            const docId = docs[existingIndex].id;
-
-            try {
-                localStorage.setItem(`doc_${state.currentDocumentName}`, content);
-                localStorage.setItem(`docById_${docId}`, JSON.stringify({
-                    name: state.currentDocumentName, content, isEphemeral: false
-                }));
-            } catch (e) {
-                console.error('Failed to save: storage quota exceeded', e);
-            }
-            setSavedDocuments(docs);
-            updateURL(docId);
-            updatePageTitle(state.currentDocumentName);
-        } else {
-            try {
-                localStorage.setItem(`doc_${state.currentDocumentName}`, content);
-            } catch (e) {
-                console.error('Failed to save: storage quota exceeded', e);
-            }
-            setSavedDocuments(docs);
-        }
-        return;
-    }
-
-    // Nothing active — open save dialog (handled in commands)
-    return 'open-save-dialog';
-}
-
-export async function loadDocumentByName(docName) {
-    const content = localStorage.getItem(`doc_${docName}`);
-    if (content) {
-        const editor = getEditor();
-        editor.innerHTML = sanitizeHTML(content);
-        state.currentDocumentName = docName;
-        // BUG FIX: loaded documents are always permanent
-        state.currentDocumentIsEphemeral = false;
-        clearEphemeralFading();
-
-        const docs = getSavedDocuments();
-        const doc = docs.find(d => d.name === docName);
-        if (doc && doc.id) updateURL(doc.id);
-
-        updatePageTitle(docName);
-        document.getElementById('load-modal').classList.add('hidden');
-        editor.focus();
-
-        if (state.centerMode) {
-            requestAnimationFrame(() => {
-                addCenterModeSpacers();
-                requestAnimationFrame(() => centerCurrentBlock(true));
-            });
-        }
-    } else {
-        await showAlert(`Document "${docName}" not found.`);
-    }
-}
-
-export async function loadDocumentById(docId) {
-    const docData = localStorage.getItem(`docById_${docId}`);
-    if (docData) {
-        try {
-            const { name, content } = JSON.parse(docData);
-            const docs = getSavedDocuments();
-            const doc = docs.find(d => d.id === docId);
-            if (doc) {
-                const editor = getEditor();
-                editor.innerHTML = sanitizeHTML(content);
-                state.currentDocumentName = name;
-                state.currentDocumentIsEphemeral = false;
-                clearEphemeralFading();
-                updatePageTitle(name);
-
-                if (state.centerMode) {
-                    requestAnimationFrame(() => {
-                        addCenterModeSpacers();
-                        requestAnimationFrame(() => centerCurrentBlock(true));
-                    });
-                }
-            } else {
-                showDeletedDocModal();
-                clearURL();
-            }
-        } catch (e) {
-            console.error('Error loading document:', e);
-            showDeletedDocModal();
-            clearURL();
-        }
-    } else {
-        showDeletedDocModal();
-        clearURL();
-    }
-}
-
-function showDeletedDocModal() {
-    document.getElementById('deleted-doc-modal').classList.remove('hidden');
-}
-
-export async function deleteDocumentByName(docName) {
-    const confirmed = await showConfirm(`Delete document "${docName}"? This cannot be undone.`);
-    if (confirmed) {
-        const docs = getSavedDocuments();
-        const doc = docs.find(d => d.name === docName);
-
-        localStorage.removeItem(`doc_${docName}`);
-        if (doc && doc.id) localStorage.removeItem(`docById_${doc.id}`);
-
-        setSavedDocuments(docs.filter(d => d.name !== docName));
-
-        if (state.currentDocumentName === docName) {
-            state.currentDocumentName = null;
-            clearURL();
-            clearPageTitle();
-        }
-
-        document.getElementById('delete-modal').classList.add('hidden');
-
-        if (state.savedSelection) {
-            const selection = window.getSelection();
-            try {
-                selection.removeAllRanges();
-                selection.addRange(state.savedSelection);
-            } catch (e) {
-                getEditor().focus();
-            }
-            state.savedSelection = null;
-        } else {
-            getEditor().focus();
-        }
-    }
-}
-
 export async function clearAll() {
     const confirmed = await showConfirm('Start a new document?');
     if (confirmed) {
         const editor = getEditor();
         editor.innerHTML = '';
-        state.currentDocumentName = null;
         state.currentDocumentIsEphemeral = false;
-        clearEphemeralFading();
         state.currentFileHandle = null;
         state.currentFileName = null;
         await clearFileHandleFromDB();
-        clearURL();
         clearPageTitle();
+        setSaveStatus('hidden');
 
         const firstBlock = createBlockElement('text', '');
         editor.appendChild(firstBlock);
@@ -453,28 +274,70 @@ export async function clearAll() {
 }
 
 export async function clearStorage() {
-    const confirmed = await showConfirm('Are you sure you want to clear all saved content from browser memory?');
+    const confirmed = await showConfirm('Clear the autosaved draft from browser memory? Documents saved to files are not affected.');
     if (confirmed) {
         localStorage.removeItem('editorContent');
     }
 }
 
-export function migrateDocumentsWithIds() {
-    const docs = getSavedDocuments();
-    let migrated = false;
+// ──────────────────────────────────
+// File handle restoration on page load
+// ──────────────────────────────────
+export async function restoreFileHandle() {
+    const savedFile = await loadFileHandleFromDB();
+    if (!savedFile || !savedFile.handle) return;
 
-    docs.forEach(doc => {
-        if (!doc.id) {
-            doc.id = generateDocumentId();
-            migrated = true;
-            const content = localStorage.getItem(`doc_${doc.name}`);
-            if (content) {
-                localStorage.setItem(`docById_${doc.id}`, JSON.stringify({ name: doc.name, content }));
-            }
+    try {
+        const permission = await savedFile.handle.queryPermission({ mode: 'readwrite' });
+        if (permission === 'granted') {
+            await loadFileIntoEditor(savedFile.handle, savedFile.fileName);
+        } else if (permission === 'denied') {
+            await clearFileHandleFromDB();
+        } else {
+            // requestPermission() requires a user gesture, so wait for the first one
+            deferPermissionRequest(savedFile);
         }
-    });
+    } catch (error) {
+        console.error('Error restoring file:', error);
+    }
+}
 
-    if (migrated) setSavedDocuments(docs);
+// Open a file from the recent list (called from a click/keypress, so
+// requestPermission has the user gesture it needs)
+export async function openRecentFile(entry) {
+    try {
+        let permission = await entry.handle.queryPermission({ mode: 'readwrite' });
+        if (permission !== 'granted') {
+            permission = await entry.handle.requestPermission({ mode: 'readwrite' });
+        }
+        if (permission !== 'granted') return;
+        await loadFileIntoEditor(entry.handle, entry.fileName);
+        await saveFileHandleToDB(entry.handle, entry.fileName);
+    } catch (error) {
+        console.error('Error opening recent file:', error);
+        await removeRecentFile(entry.handle);
+        await showAlert(`Couldn't open "${entry.fileName}" — it may have been moved or deleted.`);
+    }
+}
+
+function deferPermissionRequest(savedFile) {
+    const requestOnGesture = async () => {
+        window.removeEventListener('pointerdown', requestOnGesture, true);
+        window.removeEventListener('keydown', requestOnGesture, true);
+        try {
+            const permission = await savedFile.handle.requestPermission({ mode: 'readwrite' });
+            if (permission === 'granted') {
+                await loadFileIntoEditor(savedFile.handle, savedFile.fileName);
+            } else {
+                await clearFileHandleFromDB();
+            }
+        } catch (error) {
+            // Keep the stored handle so the next session can try again
+            console.error('Error restoring file:', error);
+        }
+    };
+    window.addEventListener('pointerdown', requestOnGesture, true);
+    window.addEventListener('keydown', requestOnGesture, true);
 }
 
 // ──────────────────────────────────
@@ -482,6 +345,24 @@ export function migrateDocumentsWithIds() {
 // ──────────────────────────────────
 export function blocksToMarkdown() {
     return htmlToMarkdown(getEditor().innerHTML);
+}
+
+// Serialize element content to markdown, preserving inline formatting
+function inlineMarkdown(node) {
+    let out = '';
+    node.childNodes.forEach(child => {
+        if (child.nodeType === Node.TEXT_NODE) { out += child.textContent; return; }
+        if (child.nodeType !== Node.ELEMENT_NODE) return;
+        const inner = inlineMarkdown(child);
+        if (!inner) return;
+        switch (child.tagName) {
+            case 'STRONG': case 'B': out += `**${inner}**`; break;
+            case 'EM': case 'I': out += `*${inner}*`; break;
+            case 'STRIKE': case 'S': case 'DEL': out += `~~${inner}~~`; break;
+            default: out += inner; break;
+        }
+    });
+    return out;
 }
 
 export function htmlToMarkdown(htmlContent) {
@@ -495,7 +376,7 @@ export function htmlToMarkdown(htmlContent) {
         const type = block.dataset.type || 'text';
         const level = parseInt(block.dataset.level) || 0;
         const contentEl = block.querySelector('.block-content');
-        const content = contentEl ? contentEl.textContent.trim() : '';
+        const content = contentEl ? inlineMarkdown(contentEl).trim() : '';
 
         if (!content && type === 'text') {
             numberedCounters = {};
@@ -526,9 +407,15 @@ export function htmlToMarkdown(htmlContent) {
     return markdown.trimEnd();
 }
 
+// Escape HTML special characters so file content can't inject markup
+function escapeHTML(text) {
+    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 export function markdownToBlocks(markdown) {
     const lines = markdown.split('\n');
     const blocks = [];
+    const inline = (text) => processInlineFormatting(escapeHTML(text));
 
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
@@ -541,24 +428,25 @@ export function markdownToBlocks(markdown) {
             continue;
         }
 
-        if (trimmed.startsWith('### '))      blocks.push(createBlockElement('heading3', trimmed.substring(4), 0));
-        else if (trimmed.startsWith('## '))   blocks.push(createBlockElement('heading2', trimmed.substring(3), 0));
-        else if (trimmed.startsWith('# '))    blocks.push(createBlockElement('heading1', trimmed.substring(2), 0));
-        else if (trimmed.startsWith('> '))    blocks.push(createBlockElement('quote', trimmed.substring(2), 0));
-        else if (trimmed.match(/^[-*]\s+/))   blocks.push(createBlockElement('bullet', trimmed.replace(/^[-*]\s+/, ''), level));
-        else if (trimmed.match(/^\d+\.\s+/))  blocks.push(createBlockElement('numbered', trimmed.replace(/^\d+\.\s+/, ''), level));
-        else                                  blocks.push(createBlockElement('text', trimmed, 0));
+        if (trimmed.startsWith('### '))      blocks.push(createBlockElement('heading3', inline(trimmed.substring(4)), 0));
+        else if (trimmed.startsWith('## '))   blocks.push(createBlockElement('heading2', inline(trimmed.substring(3)), 0));
+        else if (trimmed.startsWith('# '))    blocks.push(createBlockElement('heading1', inline(trimmed.substring(2)), 0));
+        else if (trimmed.startsWith('> '))    blocks.push(createBlockElement('quote', inline(trimmed.substring(2)), 0));
+        else if (trimmed.match(/^[-*]\s+/))   blocks.push(createBlockElement('bullet', inline(trimmed.replace(/^[-*]\s+/, '')), level));
+        else if (trimmed.match(/^\d+\.\s+/))  blocks.push(createBlockElement('numbered', inline(trimmed.replace(/^\d+\.\s+/, '')), level));
+        else                                  blocks.push(createBlockElement('text', inline(trimmed), 0));
     }
 
     return blocks;
 }
 
-// Inline markdown formatting
+// Inline markdown formatting (bold, italic, strikethrough)
 export function processInlineFormatting(text) {
     text = text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
     text = text.replace(/__(.+?)__/g, '<strong>$1</strong>');
     text = text.replace(/\*(.+?)\*/g, '<em>$1</em>');
     text = text.replace(/_(.+?)_/g, '<em>$1</em>');
+    text = text.replace(/~~(.+?)~~/g, '<strike>$1</strike>');
     return text;
 }
 
@@ -566,65 +454,14 @@ export function processInlineFormatting(text) {
 // Export functions
 // ──────────────────────────────────
 export function exportAsMarkdown() {
-    const markdown = htmlToMarkdown(getEditor().innerHTML);
+    const markdown = blocksToMarkdown();
     downloadBlob(new Blob([markdown], { type: 'text/markdown' }), generateTimestampedFilename('md'));
 }
 
-export async function exportAllAsMarkdown() {
-    const docs = getSavedDocuments();
-    if (docs.length === 0) {
-        await showAlert('No saved documents to export.');
-        return;
-    }
-
-    const files = [];
-    docs.forEach(doc => {
-        const htmlContent = localStorage.getItem(`doc_${doc.name}`);
-        if (htmlContent) {
-            const markdown = htmlToMarkdown(htmlContent);
-            const safeFilename = doc.name.replace(/[^a-z0-9_-]/gi, '_');
-            files.push({ name: `${safeFilename}.md`, content: markdown });
-        }
-    });
-
-    const zipBlob = createZipBlob(files);
-    const now = new Date();
-    const timestamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-    downloadBlob(zipBlob, `thesis_documents_${timestamp}.zip`);
-}
-
 export async function copyAsMarkdown() {
-    const blocks = getEditor().querySelectorAll('.block');
-    let markdown = '';
-    let numberedCounters = {};
-
-    blocks.forEach(block => {
-        const type = block.dataset.type || 'text';
-        const level = parseInt(block.dataset.level) || 0;
-        const contentEl = block.querySelector('.block-content');
-        const content = contentEl ? contentEl.textContent.trim() : '';
-
-        if (!content && type === 'text') { numberedCounters = {}; markdown += '\n'; return; }
-        const indent = '  '.repeat(level);
-
-        switch (type) {
-            case 'heading1': numberedCounters = {}; markdown += '# ' + content + '\n'; break;
-            case 'heading2': numberedCounters = {}; markdown += '## ' + content + '\n'; break;
-            case 'heading3': numberedCounters = {}; markdown += '### ' + content + '\n'; break;
-            case 'bullet':   numberedCounters = {}; markdown += indent + '- ' + content + '\n'; break;
-            case 'numbered':
-                if (!numberedCounters[level]) numberedCounters[level] = 1;
-                else numberedCounters[level]++;
-                Object.keys(numberedCounters).forEach(l => { if (parseInt(l) > level) delete numberedCounters[l]; });
-                markdown += indent + numberedCounters[level] + '. ' + content + '\n';
-                break;
-            case 'quote': numberedCounters = {}; markdown += '> ' + content + '\n'; break;
-            default:      numberedCounters = {}; markdown += content + '\n'; break;
-        }
-    });
-
+    const markdown = blocksToMarkdown().replace(/\n{3,}/g, '\n\n').trim();
     try {
-        await navigator.clipboard.writeText(markdown.replace(/\n{3,}/g, '\n\n').trim());
+        await navigator.clipboard.writeText(markdown);
     } catch (err) {
         console.error('Failed to copy to clipboard:', err);
     }
@@ -666,49 +503,6 @@ function downloadBlob(blob, filename) {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-}
-
-// ──────────────────────────────────
-// File handle restoration on page load
-// ──────────────────────────────────
-export async function restoreFileHandle() {
-    const savedFile = await loadFileHandleFromDB();
-    if (!savedFile || !savedFile.handle) return;
-
-    try {
-        let permission = await savedFile.handle.queryPermission({ mode: 'readwrite' });
-        if (permission !== 'granted') {
-            permission = await savedFile.handle.requestPermission({ mode: 'readwrite' });
-        }
-
-        if (permission === 'granted') {
-            const file = await savedFile.handle.getFile();
-            const markdownContent = await file.text();
-            const blocks = markdownToBlocks(markdownContent);
-
-            const editor = getEditor();
-            editor.innerHTML = '';
-            blocks.forEach(block => editor.appendChild(block));
-            updateNumberedBlocks();
-
-            state.currentFileHandle = savedFile.handle;
-            state.currentFileName = savedFile.fileName;
-            // BUG FIX: file-loaded documents are never ephemeral
-            state.currentDocumentIsEphemeral = false;
-            updatePageTitle(savedFile.fileName);
-
-            if (state.centerMode) {
-                requestAnimationFrame(() => {
-                    requestAnimationFrame(() => centerCurrentBlock(true));
-                });
-            }
-        } else {
-            await clearFileHandleFromDB();
-        }
-    } catch (error) {
-        console.error('Error restoring file:', error);
-        await clearFileHandleFromDB();
-    }
 }
 
 // ──────────────────────────────────

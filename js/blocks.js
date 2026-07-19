@@ -87,7 +87,8 @@ export function updateNumberedBlocks() {
 
 // Focus a block element, optionally at the end
 export function focusBlock(blockElement, atEnd = false) {
-    if (!blockElement) return;
+    // Bail before touching the selection — clearing it with no valid target loses the caret
+    if (!blockElement || !blockElement.querySelector('.block-content')) return;
 
     const selection = window.getSelection();
     selection.removeAllRanges();

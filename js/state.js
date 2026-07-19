@@ -1,5 +1,4 @@
-// Centralized application state
-// All mutable state lives here — mutations go through update() so they're traceable.
+// Centralized application state — all modules import and mutate this object directly.
 
 const state = {
     commandModalOpen: false,
@@ -7,46 +6,28 @@ const state = {
     wordCountVisible: false,
     saveTimeout: null,
     savedSelection: null,
-    selectedSaveIndex: 0,
-    selectedLoadIndex: 0,
-    selectedDeleteIndex: 0,
     selectedFontIndex: 0,
     selectedHeadingIndex: 0,
     customFonts: [],
     currentFontSize: 18,
     currentLineHeight: 1.6,
+    currentColumnWidth: 700,
     forwardOnlyMode: false,
     centerMode: false,
     focusMode: false,
-    ephemeralMode: false,
+    blindMode: false,
+    fogMode: false,
+    retypeActive: false,
     EPHEMERAL_WORD_LIMIT: 100,
     multiBlockSelection: [],
-    currentDocumentName: null,
     currentDocumentIsEphemeral: false,
     filteredCommandsList: [],
     currentFileHandle: null,
     currentFileName: null,
-    deferredInstallPrompt: null,
+    saveStatus: 'hidden',
+    currentStage: null,
+    selectedRecentIndex: 0,
     selectedCommandIndex: 0,
 };
-
-// Simple getter/setter with optional debug logging
-export function get(key) {
-    return state[key];
-}
-
-export function set(key, value) {
-    if (!(key in state)) {
-        console.warn(`State: unknown key "${key}"`);
-    }
-    state[key] = value;
-}
-
-// Batch update multiple keys
-export function update(patch) {
-    for (const [key, value] of Object.entries(patch)) {
-        set(key, value);
-    }
-}
 
 export default state;
