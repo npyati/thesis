@@ -11,6 +11,7 @@ const state = {
     customFonts: [],
     currentFontSize: 18,
     currentLineHeight: 1.6,
+    currentColumnWidth: 700,
     forwardOnlyMode: false,
     centerMode: false,
     focusMode: false,
@@ -26,7 +27,6 @@ const state = {
     saveStatus: 'hidden',
     currentStage: null,
     selectedRecentIndex: 0,
-    deferredInstallPrompt: null,
     selectedCommandIndex: 0,
 };
 

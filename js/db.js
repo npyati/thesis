@@ -4,6 +4,12 @@ const DB_NAME = 'thesis-db';
 const DB_VERSION = 1;
 const STORE_NAME = 'file-handles';
 
+// The native macOS wrapper stores plain {path, name} records in place of real
+// FileSystemFileHandles; its shim revives them. A no-op on the web.
+function reviveHandle(handle) {
+    return window.__thesisRehydrateHandle ? window.__thesisRehydrateHandle(handle) : handle;
+}
+
 function initDB() {
     return new Promise((resolve, reject) => {
         const request = indexedDB.open(DB_NAME, DB_VERSION);
@@ -36,7 +42,11 @@ export async function loadFileHandleFromDB() {
         const store = transaction.objectStore(STORE_NAME);
         return new Promise((resolve, reject) => {
             const request = store.get('currentFile');
-            request.onsuccess = () => resolve(request.result);
+            request.onsuccess = () => {
+                const result = request.result;
+                if (result && result.handle) result.handle = reviveHandle(result.handle);
+                resolve(result);
+            };
             request.onerror = () => reject(request.error);
         });
     } catch (error) {
@@ -81,7 +91,10 @@ function putInStore(value, key) {
 
 export async function getRecentFiles() {
     try {
-        return (await getFromStore(RECENT_KEY)) || [];
+        const list = (await getFromStore(RECENT_KEY)) || [];
+        return list.map(entry => entry && entry.handle
+            ? { ...entry, handle: reviveHandle(entry.handle) }
+            : entry);
     } catch (error) {
         console.error('Error reading recent files:', error);
         return [];

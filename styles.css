@@ -92,7 +92,8 @@ body.dark-mode #editor blockquote {
 
 #editor {
     width: 90%;
-    max-width: 700px;
+    max-width: var(--column-width, 700px);
+    box-sizing: border-box;
     height: 80%;
     background-color: #ffffff;
     border: none;
@@ -501,9 +502,10 @@ body.dark-mode #word-count-display .separator {
     color: #555;
 }
 
-/* Canvas mode - seamless style with same positioning.
-   The editor goes transparent and the body provides the surface color:
-   white in light mode, unchanged (#1e1e1e) in dark mode. */
+/* Canvas mode - seamless, no page.
+   The editor goes transparent, the body provides the surface color (white in
+   light mode, unchanged #1e1e1e in dark mode), and the writing surface fills
+   the window height so text never clips at invisible page edges. */
 body.canvas-mode:not(.dark-mode) {
     background-color: #ffffff;
 }
@@ -511,6 +513,7 @@ body.canvas-mode:not(.dark-mode) {
 body.canvas-mode #editor {
     box-shadow: none;
     background-color: transparent;
+    height: 100%;
 }
 
 /* Typewriter mode - disable text selection */
@@ -743,7 +746,7 @@ body.fog-mode.dark-mode .block-heading3 .block-content {
 }
 
 #retype-text {
-    max-width: 700px;
+    max-width: var(--column-width, 700px);
     width: 90%;
     max-height: 22vh;
     overflow-y: auto;
@@ -754,7 +757,7 @@ body.fog-mode.dark-mode .block-heading3 .block-content {
 }
 
 #retype-meta {
-    max-width: 700px;
+    max-width: var(--column-width, 700px);
     width: 90%;
     display: flex;
     justify-content: space-between;
