@@ -3,6 +3,68 @@
 import { getCurrentBlock } from './blocks.js';
 
 // Apply bold/italic/strikethrough using DOM ranges instead of execCommand
+const TAG_ALIASES = {
+    strong: ['strong', 'b'],
+    em: ['em', 'i'],
+    strike: ['strike', 's', 'del'],
+};
+
+function unwrapElement(el) {
+    const parent = el.parentNode;
+    while (el.firstChild) parent.insertBefore(el.firstChild, el);
+    parent.removeChild(el);
+}
+
+function formatElementFor(node, aliases) {
+    const el = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+    return el ? el.closest(aliases.join(',')) : null;
+}
+
+// Character offset of (container, offset) measured from the start of root
+function charOffsetIn(root, container, offset) {
+    const probe = document.createRange();
+    probe.selectNodeContents(root);
+    probe.setEnd(container, offset);
+    return probe.toString().length;
+}
+
+// Inverse of charOffsetIn: the text position `target` characters into root
+function pointAtChar(root, target) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let acc = 0;
+    let node;
+    while ((node = walker.nextNode())) {
+        const len = node.textContent.length;
+        if (acc + len >= target) return [node, target - acc];
+        acc += len;
+    }
+    return [root, root.childNodes.length];
+}
+
+// Text nodes that genuinely overlap the range — a boundary merely touching a
+// node doesn't count. (WebKit often puts selection boundaries at element
+// edges where Chrome uses inner text nodes, so ancestor checks alone fail.)
+function textNodesInRange(range) {
+    const container = range.commonAncestorContainer;
+    const root = container.nodeType === Node.TEXT_NODE ? container.parentElement : container;
+    if (!root) return [];
+
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    let node;
+    while ((node = walker.nextNode())) {
+        if (!node.textContent.length) continue;
+        const nodeRange = document.createRange();
+        nodeRange.selectNodeContents(node);
+        // overlap > 0 ⇔ range.end > node.start && range.start < node.end
+        if (range.compareBoundaryPoints(Range.START_TO_END, nodeRange) > 0 &&
+            range.compareBoundaryPoints(Range.END_TO_START, nodeRange) < 0) {
+            nodes.push(node);
+        }
+    }
+    return nodes;
+}
+
 export function applyFormatting(format) {
     const selection = window.getSelection();
     if (!selection.rangeCount || selection.isCollapsed) return;
@@ -18,35 +80,46 @@ export function applyFormatting(format) {
 
     const tag = tagMap[format];
     if (!tag) return;
+    const aliases = TAG_ALIASES[tag];
 
-    // Check if selection is already wrapped in this format
-    const parentEl = range.commonAncestorContainer.nodeType === Node.TEXT_NODE
-        ? range.commonAncestorContainer.parentElement
-        : range.commonAncestorContainer;
+    const editor = document.getElementById('editor');
+    const nodes = textNodesInRange(range);
+    const fullyFormatted = nodes.length > 0 && nodes.every(n => formatElementFor(n, aliases));
 
-    const existingFormat = parentEl.closest(tag) || parentEl.closest(tag === 'strong' ? 'b' : tag === 'em' ? 'i' : 's');
+    if (fullyFormatted) {
+        // Remember the selection as character offsets in a stable ancestor —
+        // unwrapping moves nodes and normalize() merges them, which would
+        // otherwise collapse the selection to the end of the block
+        const anchorEl = range.commonAncestorContainer.nodeType === Node.TEXT_NODE
+            ? range.commonAncestorContainer.parentElement
+            : range.commonAncestorContainer;
+        const stableRoot = (anchorEl && anchorEl.closest('.block-content')) || editor;
+        const startChar = charOffsetIn(stableRoot, range.startContainer, range.startOffset);
+        const endChar = charOffsetIn(stableRoot, range.endContainer, range.endOffset);
 
-    if (existingFormat) {
-        // Remove formatting: unwrap the element
-        const parent = existingFormat.parentNode;
-        while (existingFormat.firstChild) {
-            parent.insertBefore(existingFormat.firstChild, existingFormat);
-        }
-        parent.removeChild(existingFormat);
+        // Remove formatting: unwrap every format element the selection touches
+        // (a partially-selected run is unwrapped whole)
+        const els = [...new Set(nodes.map(n => formatElementFor(n, aliases)))];
+        els.forEach(unwrapElement);
         // Normalize to merge adjacent text nodes
-        parent.normalize();
+        editor.normalize();
+
+        // Restore the selection over the same characters
+        const [startNode, startOffset] = pointAtChar(stableRoot, startChar);
+        const [endNode, endOffset] = pointAtChar(stableRoot, endChar);
+        const restored = document.createRange();
+        restored.setStart(startNode, startOffset);
+        restored.setEnd(endNode, endOffset);
+        selection.removeAllRanges();
+        selection.addRange(restored);
     } else {
-        // Apply formatting: wrap selection in element
+        // Apply formatting: wrap selection, stripping any same-format elements
+        // inside it first so repeated toggling can never nest tags
         const wrapper = document.createElement(tag);
-        try {
-            range.surroundContents(wrapper);
-        } catch (e) {
-            // surroundContents fails on partial element selections
-            // Fall back to extracting and re-inserting
-            const fragment = range.extractContents();
-            wrapper.appendChild(fragment);
-            range.insertNode(wrapper);
-        }
+        const fragment = range.extractContents();
+        fragment.querySelectorAll(aliases.join(',')).forEach(unwrapElement);
+        wrapper.appendChild(fragment);
+        range.insertNode(wrapper);
         // Re-select the wrapped content
         selection.removeAllRanges();
         const newRange = document.createRange();
@@ -54,7 +127,13 @@ export function applyFormatting(format) {
         selection.addRange(newRange);
     }
 
-    document.getElementById('editor').focus();
+    // Sweep empty format shells — extractContents leaves one behind when a
+    // selection starts or ends inside an existing format element
+    editor.querySelectorAll('strong, b, em, i, strike, s, del').forEach(el => {
+        if (el.textContent === '' && !el.querySelector('br')) el.remove();
+    });
+
+    editor.focus();
 }
 
 // Strikethrough the last word before cursor

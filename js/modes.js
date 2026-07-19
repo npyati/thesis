@@ -185,6 +185,24 @@ export function removeCenterModeSpacers() {
     document.getElementById('center-mode-bottom-spacer')?.remove();
 }
 
+// Rect of the caret's own visual line, so long wrapped paragraphs keep the
+// line being typed pinned (true typewriter scrolling) rather than the block top
+function caretLineRect(editor) {
+    const selection = window.getSelection();
+    if (!selection.rangeCount) return null;
+    let range = selection.getRangeAt(0);
+    if (!editor.contains(range.startContainer)) return null;
+    range = range.cloneRange();
+    range.collapse(false);
+    let rects = range.getClientRects();
+    if (!rects.length && range.startContainer.nodeType === Node.TEXT_NODE && range.startOffset > 0) {
+        // Collapsed ranges at some positions report no rects — widen one char back
+        range.setStart(range.startContainer, range.startOffset - 1);
+        rects = range.getClientRects();
+    }
+    return rects.length ? rects[rects.length - 1] : null;
+}
+
 export function centerCurrentBlock(instant = false) {
     if (!state.centerMode) return;
 
@@ -192,13 +210,14 @@ export function centerCurrentBlock(instant = false) {
     if (!currentBlock) return;
 
     const editor = getEditor();
-    const blockRect = currentBlock.getBoundingClientRect();
-    const viewportHeight = window.innerHeight;
-    const targetPositionFromTop = viewportHeight * 0.38;
-    const scrollTarget = editor.scrollTop + (blockRect.top - targetPositionFromTop);
+    // Track the caret's line; fall back to the block top for empty lines
+    const rect = caretLineRect(editor) || currentBlock.getBoundingClientRect();
+    const targetPositionFromTop = window.innerHeight * 0.38;
+    const delta = rect.top - targetPositionFromTop;
+    if (Math.abs(delta) < 2) return; // already centered — avoid scroll jitter
 
     editor.scrollTo({
-        top: scrollTarget,
+        top: editor.scrollTop + delta,
         behavior: instant ? 'auto' : 'smooth'
     });
 }

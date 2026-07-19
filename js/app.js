@@ -40,7 +40,11 @@ const availableFonts = [
     'ui-monospace', 'serif', 'sans-serif', 'monospace', 'cursive', 'fantasy'
 ];
 
-function getAllFonts() { return [...state.customFonts, ...availableFonts]; }
+function getAllFonts() {
+    const all = [...state.customFonts, ...(state.installedFonts || []), ...availableFonts];
+    const seen = new Set();
+    return all.filter(f => { const key = f.toLowerCase(); if (seen.has(key)) return false; seen.add(key); return true; });
+}
 
 function isFontAvailable(fontName) {
     const testString = 'mmmmmmmmmmlli';
@@ -74,6 +78,11 @@ function increaseLineHeight() { state.currentLineHeight = Math.min(state.current
 function decreaseLineHeight() { state.currentLineHeight = Math.max(state.currentLineHeight - 0.1, 1.0); applyLineHeight(); }
 function applyLineHeight() { editor.style.lineHeight = state.currentLineHeight; localStorage.setItem('editorLineHeight', state.currentLineHeight); }
 function loadLineHeight() { const l = localStorage.getItem('editorLineHeight'); if (l) { state.currentLineHeight = parseFloat(l); editor.style.lineHeight = state.currentLineHeight; } }
+
+function increaseColumnWidth() { state.currentColumnWidth = Math.min(state.currentColumnWidth + 50, 1200); applyColumnWidth(); }
+function decreaseColumnWidth() { state.currentColumnWidth = Math.max(state.currentColumnWidth - 50, 400); applyColumnWidth(); }
+function applyColumnWidth() { document.documentElement.style.setProperty('--column-width', state.currentColumnWidth + 'px'); localStorage.setItem('editorColumnWidth', state.currentColumnWidth); }
+function loadColumnWidth() { const w = localStorage.getItem('editorColumnWidth'); if (w) { state.currentColumnWidth = parseInt(w); document.documentElement.style.setProperty('--column-width', state.currentColumnWidth + 'px'); } }
 
 // ──────────────────────────────────
 // Word count (debounced)
@@ -447,21 +456,6 @@ function deleteBlocks() {
 }
 
 // ──────────────────────────────────
-// PWA install
-// ──────────────────────────────────
-async function installApp() {
-    if (state.deferredInstallPrompt) {
-        state.deferredInstallPrompt.prompt();
-        const { outcome } = await state.deferredInstallPrompt.userChoice;
-        if (outcome === 'accepted') state.deferredInstallPrompt = null;
-    } else if (window.matchMedia('(display-mode: standalone)').matches) {
-        await showAlert('thesis is already installed as an app.');
-    } else {
-        await showAlert('To install thesis as an app, use your browser\'s "Install" or "Add to Home Screen" option.');
-    }
-}
-
-// ──────────────────────────────────
 // Intro
 // ──────────────────────────────────
 const introHTML = `<p><strong>thesis</strong> is a minimalist text editor, designed for focus and creativity.</p><p>It works through the keyboard — you shouldn't need the mouse. Type <strong>/</strong> to open the command menu, then search or use the arrow keys and press <strong>[enter]</strong>. Type <strong>/</strong> again to close it (press <strong>[space]</strong> at the empty prompt to keep a literal /).</p><p>Your writing saves automatically as you type — you never need to reach for Save. It's kept in this browser, and you can also <em>Open File</em> or <em>Save to File As…</em> to sync a real <strong>.md</strong> file on your computer. Nothing is ever sent online.</p><p>There are a few different ways to write, all in the / menu:</p><ul><li><strong>Stages</strong> — Draft, Revise, and Polish set the editor up for each phase of writing.</li><li><strong>Forward-only</strong> — type like a typewriter, with no going back.</li><li><strong>Blind</strong> — write without seeing anything; a running word count keeps you company.</li><li><strong>Ephemeral</strong> — the oldest words fade away as new ones arrive, leaving no record.</li><li><strong>Retype</strong> — redraft by retyping your old draft one paragraph at a time.</li><li><strong>Focus</strong> — fade or blur everything but the line you're on, or keep it centered.</li></ul><p>There's more to find — fonts, dark mode, find, export to Markdown or Word — but that's enough to start. There isn't much here, just what's necessary.</p><p><strong>This is a work in progress.</strong> Send me a note if you have ideas.</p>`;
@@ -528,6 +522,8 @@ const commands = [
     { name: 'Decrease Font Size', description: 'Make text smaller (Ctrl/Cmd + -)', action: decreaseFontSize, category: 'View' },
     { name: 'Increase Line Height', description: 'Make text more spacious (Ctrl/Cmd + ])', action: increaseLineHeight, category: 'View' },
     { name: 'Decrease Line Height', description: 'Make text more compact (Ctrl/Cmd + [)', action: decreaseLineHeight, category: 'View' },
+    { name: 'Widen Text Column', description: 'Make the text column wider (Ctrl/Cmd + Shift + ])', action: increaseColumnWidth, category: 'View' },
+    { name: 'Narrow Text Column', description: 'Make the text column narrower (Ctrl/Cmd + Shift + [)', action: decreaseColumnWidth, category: 'View' },
 
     // Share
     { name: 'Copy All', description: 'Copy all content to clipboard', action: copyAll, category: 'Share' },
@@ -538,7 +534,6 @@ const commands = [
 
     // App
     { name: 'Show Intro', description: 'What is this?', action: showIntro, category: 'App' },
-    { name: 'Install App', description: 'Install thesis as a standalone app (no browser chrome)', action: installApp, category: 'App' },
     { name: 'Clear Storage', description: 'Clear the autosaved draft from browser memory', action: clearStorage, category: 'App' },
 ];
 
@@ -911,6 +906,31 @@ editor.addEventListener('keydown', (event) => {
         return;
     }
 
+    // Select-all delete: with center-mode spacers the range roots at the editor
+    // itself and WebKit refuses to delete it — perform the wipe ourselves
+    if (event.key === 'Backspace' || event.key === 'Delete') {
+        const sel = window.getSelection();
+        if (sel.rangeCount && !sel.isCollapsed) {
+            const r = sel.getRangeAt(0);
+            const blocks = editor.querySelectorAll('.block');
+            if (r.startContainer === editor && r.endContainer === editor && blocks.length > 0
+                && r.intersectsNode(blocks[0]) && r.intersectsNode(blocks[blocks.length - 1])) {
+                event.preventDefault();
+                recordCheckpoint();
+                editor.innerHTML = '';
+                const nb = createBlockElement('text', '');
+                editor.appendChild(nb);
+                if (state.centerMode) addCenterModeSpacers();
+                const bc = nb.querySelector('.block-content');
+                const nr = document.createRange();
+                nr.selectNodeContents(bc); nr.collapse(true);
+                sel.removeAllRanges(); sel.addRange(nr);
+                autoSave();
+                return;
+            }
+        }
+    }
+
     // Backspace — merge blocks
     if (event.key === 'Backspace') {
         const sel = window.getSelection();
@@ -990,26 +1010,46 @@ editor.addEventListener('keydown', (event) => {
         const sel = window.getSelection(); if (!sel.rangeCount) return;
         const cb = getCurrentBlock(); if (!cb) return;
         const ce = cb.querySelector('.block-content'); if (!ce) return;
-        const rects = sel.getRangeAt(0).getClientRects(); if (rects.length === 0) return;
-        const cr = rects[0];
-        const lh = parseInt(window.getComputedStyle(ce).lineHeight) || 20;
-        const tr = document.caretRangeFromPoint(cr.left, cr.top - lh);
-        if (tr && ce.contains(tr.startContainer)) { event.preventDefault(); sel.removeAllRanges(); sel.addRange(tr); return; }
-        const prev = cb.previousElementSibling;
+        const rects = sel.getRangeAt(0).getClientRects();
+        if (rects.length > 0) {
+            const cr = rects[0];
+            const lh = parseInt(window.getComputedStyle(ce).lineHeight) || 20;
+            const tr = document.caretRangeFromPoint(cr.left, cr.top - lh);
+            if (tr && ce.contains(tr.startContainer)) { event.preventDefault(); sel.removeAllRanges(); sel.addRange(tr); return; }
+        }
+        // Siblings may be non-blocks (center-mode spacers) — only focus real blocks
+        let prev = cb.previousElementSibling;
+        while (prev && !(prev.classList && prev.classList.contains('block'))) prev = prev.previousElementSibling;
         if (prev) { event.preventDefault(); focusBlock(prev, true); return; }
+        // Top of document — park the caret at the start rather than let the browser drop it
+        event.preventDefault();
+        const r = document.createRange();
+        r.selectNodeContents(ce); r.collapse(true);
+        sel.removeAllRanges(); sel.addRange(r);
+        return;
     }
 
     if (event.key === 'ArrowDown' && !event.altKey && !event.shiftKey && !event.ctrlKey && !event.metaKey) {
         const sel = window.getSelection(); if (!sel.rangeCount) return;
         const cb = getCurrentBlock(); if (!cb) return;
         const ce = cb.querySelector('.block-content'); if (!ce) return;
-        const rects = sel.getRangeAt(0).getClientRects(); if (rects.length === 0) return;
-        const cr = rects[0];
-        const lh = parseInt(window.getComputedStyle(ce).lineHeight) || 20;
-        const tr = document.caretRangeFromPoint(cr.left, cr.bottom + lh);
-        if (tr && ce.contains(tr.startContainer)) { event.preventDefault(); sel.removeAllRanges(); sel.addRange(tr); return; }
-        const next = cb.nextElementSibling;
+        const rects = sel.getRangeAt(0).getClientRects();
+        if (rects.length > 0) {
+            const cr = rects[0];
+            const lh = parseInt(window.getComputedStyle(ce).lineHeight) || 20;
+            const tr = document.caretRangeFromPoint(cr.left, cr.bottom + lh);
+            if (tr && ce.contains(tr.startContainer)) { event.preventDefault(); sel.removeAllRanges(); sel.addRange(tr); return; }
+        }
+        // Siblings may be non-blocks (center-mode spacers) — only focus real blocks
+        let next = cb.nextElementSibling;
+        while (next && !(next.classList && next.classList.contains('block'))) next = next.nextElementSibling;
         if (next) { event.preventDefault(); focusBlock(next, false); return; }
+        // End of document — park the caret at the end rather than let the browser drop it
+        event.preventDefault();
+        const r = document.createRange();
+        r.selectNodeContents(ce); r.collapse(false);
+        sel.removeAllRanges(); sel.addRange(r);
+        return;
     }
 
     // Alt+Arrow — move blocks
@@ -1059,6 +1099,8 @@ editor.addEventListener('keydown', (event) => {
     if ((event.ctrlKey || event.metaKey) && (event.key === '-' || event.key === '_')) { event.preventDefault(); decreaseFontSize(); return; }
     if ((event.ctrlKey || event.metaKey) && event.key === ']') { event.preventDefault(); increaseLineHeight(); return; }
     if ((event.ctrlKey || event.metaKey) && event.key === '[') { event.preventDefault(); decreaseLineHeight(); return; }
+    if ((event.ctrlKey || event.metaKey) && (event.key === '}' || (event.shiftKey && event.code === 'BracketRight'))) { event.preventDefault(); increaseColumnWidth(); return; }
+    if ((event.ctrlKey || event.metaKey) && (event.key === '{' || (event.shiftKey && event.code === 'BracketLeft'))) { event.preventDefault(); decreaseColumnWidth(); return; }
 
     // Cmd+S — save
     if ((event.metaKey || event.ctrlKey) && event.key === 's') { event.preventDefault(); quickSave(); return; }
@@ -1187,15 +1229,35 @@ editor.addEventListener('beforeinput', (event) => {
         el = el.parentElement;
     }
     if (!inside) {
-        event.preventDefault();
-        const fb = editor.querySelector('.block');
-        if (fb) focusBlock(fb);
-        else { const nb = createBlockElement('text', ''); editor.appendChild(nb); focusBlock(nb); }
+        let fb = editor.querySelector('.block');
+        if (!fb) { fb = createBlockElement('text', ''); editor.appendChild(fb); }
+        // Move the caret synchronously (focusBlock's rAF is too late) and let inserts
+        // proceed there so the first keystroke isn't swallowed; deletes stay blocked
+        const bc = fb.querySelector('.block-content');
+        if (bc) {
+            const r = document.createRange();
+            r.selectNodeContents(bc); r.collapse(true);
+            sel.removeAllRanges(); sel.addRange(r);
+        }
+        if (event.inputType.startsWith('delete')) event.preventDefault();
     }
 });
 
 // Editor input handler
 editor.addEventListener('input', (event) => {
+    // Deleting everything removes the last block and leaves the caret in the bare
+    // editor, above where a first line renders — rebuild immediately, caret inside
+    if (!editor.querySelector('.block')) {
+        editor.innerHTML = '';
+        const nb = createBlockElement('text', '');
+        editor.appendChild(nb);
+        if (state.centerMode) addCenterModeSpacers();
+        const bc = nb.querySelector('.block-content');
+        const r = document.createRange();
+        r.selectNodeContents(bc); r.collapse(true);
+        const s = window.getSelection();
+        s.removeAllRanges(); s.addRange(r);
+    }
     scheduleCheckpoint();
     if (state.blindMode) updateBlindCount();
     if (!document.getElementById('find-bar').classList.contains('hidden')) closeFindBar(false);
@@ -1584,7 +1646,14 @@ setTimeout(() => {
 loadFont();
 loadFontSize();
 loadLineHeight();
+loadColumnWidth();
 loadCustomFonts();
+
+// Native wrapper only: it exposes the Mac's installed font families, which the
+// sandboxed webview can't otherwise see or enumerate. A no-op on the web.
+if (window.__thesisInstalledFonts) {
+    window.__thesisInstalledFonts().then(fonts => { state.installedFonts = fonts; }).catch(() => {});
+}
 
 // Register service worker
 if ('serviceWorker' in navigator) {
@@ -1592,11 +1661,5 @@ if ('serviceWorker' in navigator) {
         .then(() => console.log('Service worker registered'))
         .catch((err) => console.log('Service worker registration failed:', err));
 }
-
-// PWA install prompt
-window.addEventListener('beforeinstallprompt', (event) => {
-    event.preventDefault();
-    state.deferredInstallPrompt = event;
-});
 
 document.addEventListener('fullscreenchange', () => {});
