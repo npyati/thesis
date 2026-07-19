@@ -1,3 +1,23 @@
+/* Window Controls Overlay: drag strip for the frameless installed app.
+   Hidden by default; only active when the OS draws the app without a title bar. */
+#titlebar {
+    display: none;
+}
+
+@media (display-mode: window-controls-overlay) {
+    #titlebar {
+        display: block;
+        position: fixed;
+        top: env(titlebar-area-y, 0);
+        left: env(titlebar-area-x, 0);
+        width: env(titlebar-area-width, 100%);
+        height: env(titlebar-area-height, 33px);
+        -webkit-app-region: drag;
+        app-region: drag;
+        z-index: 900; /* above editor, below modals/find-bar (1000) */
+    }
+}
+
 body {
     margin: 0;
     font-family: 'Helvetica', Arial, sans-serif;
@@ -72,7 +92,8 @@ body.dark-mode #editor blockquote {
 
 #editor {
     width: 90%;
-    max-width: 700px;
+    max-width: var(--column-width, 700px);
+    box-sizing: border-box;
     height: 80%;
     background-color: #ffffff;
     border: none;
@@ -326,21 +347,48 @@ body.dark-mode #command-search:-webkit-autofill:focus {
     padding: 8px 12px;
     background: #f8f8f8;
     border-bottom: 1px solid #ddd;
-    display: none; /* Hidden by default, shown by JS when modes are active */
+    display: none; /* Hidden by default, shown as block by JS when relevant */
+}
+
+.save-line {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    color: #555;
+}
+
+.save-line + .mode-badges {
+    margin-top: 8px;
+}
+
+.save-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #bbb;
+    flex-shrink: 0;
+}
+
+.save-line.synced .save-dot { background: #8fbc8f; }
+.save-line.saving .save-dot { background: #d4a94e; }
+.save-line.detached .save-dot { background: #d9534f; }
+
+.mode-badges {
+    display: flex;
     flex-wrap: wrap;
     gap: 6px;
 }
 
 .mode-badge {
     display: inline-block;
-    padding: 3px 10px;
-    background: #4a9eff;
-    color: white;
-    border-radius: 12px;
+    padding: 2px 9px;
+    background: #ececec;
+    color: #555;
+    border-radius: 10px;
     font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.3px;
-    box-shadow: 0 0 8px rgba(74, 158, 255, 0.4);
+    font-weight: 500;
+    letter-spacing: 0.2px;
 }
 
 body.dark-mode #mode-status {
@@ -348,14 +396,36 @@ body.dark-mode #mode-status {
     border-bottom: 1px solid #555;
 }
 
+body.dark-mode .save-line {
+    color: #bbb;
+}
+
 body.dark-mode .mode-badge {
-    background: #5ba3ff;
-    box-shadow: 0 0 8px rgba(91, 163, 255, 0.5);
+    background: #4a4a4a;
+    color: #d0d0d0;
 }
 
 #command-list {
     overflow-y: auto;
     max-height: 350px;
+}
+
+.command-group {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: #aaa;
+    padding: 10px 16px 4px;
+    background: #fff;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+
+body.dark-mode .command-group {
+    color: #888;
+    background: #2d2d2d;
 }
 
 .command-item {
@@ -432,14 +502,18 @@ body.dark-mode #word-count-display .separator {
     color: #555;
 }
 
-/* Canvas mode - seamless style with same positioning */
-body.canvas-mode #editor {
-    box-shadow: none;
-    background-color: #f5f5f5;
+/* Canvas mode - seamless, no page.
+   The editor goes transparent, the body provides the surface color (white in
+   light mode, unchanged #1e1e1e in dark mode), and the writing surface fills
+   the window height so text never clips at invisible page edges. */
+body.canvas-mode:not(.dark-mode) {
+    background-color: #ffffff;
 }
 
-body.canvas-mode.dark-mode #editor {
-    background-color: #1e1e1e;
+body.canvas-mode #editor {
+    box-shadow: none;
+    background-color: transparent;
+    height: 100%;
 }
 
 /* Typewriter mode - disable text selection */
@@ -448,6 +522,309 @@ body.typewriter-mode #editor {
     -webkit-user-select: none;
     -moz-user-select: none;
     -ms-user-select: none;
+}
+
+/* Find bar */
+#find-bar {
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    padding: 6px 10px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    z-index: 1000;
+}
+
+#find-bar.hidden {
+    display: none;
+}
+
+#find-input {
+    border: none;
+    outline: none;
+    font-size: 14px;
+    width: 180px;
+    background: transparent;
+    color: inherit;
+}
+
+#find-count {
+    font-size: 12px;
+    color: #999;
+    min-width: 34px;
+    text-align: right;
+}
+
+body.dark-mode #find-bar {
+    background: #2d2d2d;
+    border-color: #555;
+    color: #e0e0e0;
+}
+
+::highlight(find-match) {
+    background-color: rgba(255, 213, 79, 0.5);
+}
+
+::highlight(find-current) {
+    background-color: rgba(255, 152, 0, 0.75);
+}
+
+body.dark-mode ::highlight(find-match) {
+    background-color: rgba(255, 213, 79, 0.3);
+}
+
+body.dark-mode ::highlight(find-current) {
+    background-color: rgba(255, 152, 0, 0.55);
+}
+
+/* Recent files list */
+.file-list {
+    max-height: 300px;
+    overflow-y: auto;
+    margin-bottom: 16px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+.file-item {
+    padding: 12px 16px;
+    cursor: pointer;
+    border-bottom: 1px solid #f0f0f0;
+    transition: background-color 0.15s ease;
+}
+
+.file-item:last-child {
+    border-bottom: none;
+}
+
+.file-item:hover {
+    background-color: #f5f5f5;
+}
+
+.file-item.selected {
+    background-color: #e8f4fd;
+}
+
+.file-item-name {
+    font-weight: 600;
+    font-size: 14px;
+    margin-bottom: 2px;
+}
+
+.file-item-date {
+    font-size: 12px;
+    color: #666;
+}
+
+.no-files {
+    padding: 20px;
+    text-align: center;
+    color: #999;
+}
+
+body.dark-mode .file-list {
+    border-color: #555;
+}
+
+body.dark-mode .file-item {
+    border-bottom-color: #444;
+}
+
+body.dark-mode .file-item:hover {
+    background-color: #3d3d3d;
+}
+
+body.dark-mode .file-item.selected {
+    background-color: #4d4d4d;
+}
+
+body.dark-mode .file-item-date {
+    color: #999;
+}
+
+/* Blind mode — the words are there, just invisible */
+body.blind-mode #editor {
+    color: transparent;
+    caret-color: transparent;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+#blind-overlay {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    z-index: 500;
+}
+
+#blind-overlay.hidden {
+    display: none;
+}
+
+#blind-readout {
+    text-align: center;
+    color: #333;
+    opacity: 0.16;
+    user-select: none;
+}
+
+#blind-words {
+    font-size: 96px;
+    font-weight: 600;
+    line-height: 1;
+}
+
+#blind-sub {
+    font-size: 20px;
+    letter-spacing: 3px;
+    margin-top: 2px;
+}
+
+#blind-chars {
+    font-size: 15px;
+    margin-top: 12px;
+}
+
+body.dark-mode #blind-readout {
+    color: #e0e0e0;
+}
+
+/* Fog focus — finished text blurs into an unreadable smudge; the block you're
+   writing stays sharp. */
+body.fog-mode .block-content {
+    color: transparent;
+    text-shadow: 0 0 8px rgba(51, 51, 51, 0.5);
+    transition: color 0.25s ease, text-shadow 0.25s ease;
+}
+
+body.fog-mode .block-heading1 .block-content,
+body.fog-mode .block-heading2 .block-content,
+body.fog-mode .block-heading3 .block-content {
+    text-shadow: 0 0 14px rgba(51, 51, 51, 0.5);
+}
+
+body.fog-mode .block.fog-clear .block-content {
+    color: inherit;
+    text-shadow: none;
+}
+
+body.fog-mode.dark-mode .block-content {
+    text-shadow: 0 0 8px rgba(224, 224, 224, 0.5);
+}
+
+body.fog-mode.dark-mode .block-heading1 .block-content,
+body.fog-mode.dark-mode .block-heading2 .block-content,
+body.fog-mode.dark-mode .block-heading3 .block-content {
+    text-shadow: 0 0 14px rgba(224, 224, 224, 0.5);
+}
+
+/* Retype mode — old draft dimmed above, fresh document below */
+#retype-bar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 18px 16px 14px;
+    background: rgba(249, 249, 249, 0.97);
+    border-bottom: 1px solid #e5e5e5;
+    z-index: 800;
+}
+
+#retype-bar.hidden {
+    display: none;
+}
+
+#retype-text {
+    max-width: var(--column-width, 700px);
+    width: 90%;
+    max-height: 22vh;
+    overflow-y: auto;
+    font-size: 16px;
+    line-height: 1.5;
+    color: #777;
+    white-space: pre-wrap;
+}
+
+#retype-meta {
+    max-width: var(--column-width, 700px);
+    width: 90%;
+    display: flex;
+    justify-content: space-between;
+    margin-top: 8px;
+    font-size: 12px;
+    color: #aaa;
+}
+
+body.retype-mode #editor {
+    height: 58%;
+    margin-top: 26vh;
+}
+
+body.dark-mode #retype-bar {
+    background: rgba(30, 30, 30, 0.97);
+    border-bottom-color: #444;
+}
+
+body.dark-mode #retype-text {
+    color: #999;
+}
+
+body.dark-mode #retype-meta {
+    color: #666;
+}
+
+/* Print */
+@media print {
+    body, body.dark-mode {
+        display: block;
+        height: auto;
+        overflow: visible;
+        background: #fff !important;
+        color: #000 !important;
+    }
+
+    #editor, body.dark-mode #editor {
+        width: 100%;
+        max-width: none;
+        height: auto;
+        overflow: visible;
+        box-shadow: none;
+        padding: 0;
+        background: #fff !important;
+        color: #000 !important;
+    }
+
+    #command-modal,
+    #word-count-display,
+    #find-bar,
+    #retype-bar,
+    #blind-overlay,
+    .modal-overlay,
+    [data-spacer] {
+        display: none !important;
+    }
+
+    /* Undo focus-mode fading on paper */
+    .block {
+        opacity: 1 !important;
+    }
+
+    /* Reveal fogged text when printing */
+    body.fog-mode .block-content {
+        color: #000 !important;
+        text-shadow: none !important;
+    }
 }
 
 /* Focus mode - fade non-active blocks */
@@ -494,11 +871,9 @@ body.focus-mode #editor .block.focus-active {
     color: #333;
 }
 
-#save-name-input,
-#load-search,
-#delete-search,
 #font-search,
-#heading-search {
+#heading-search,
+#recent-search {
     width: 100%;
     padding: 14px 16px;
     border: 1px solid #ddd;
@@ -510,11 +885,9 @@ body.focus-mode #editor .block.focus-active {
     background: #fff;
 }
 
-#save-name-input:focus,
-#load-search:focus,
-#delete-search:focus,
 #font-search:focus,
-#heading-search:focus {
+#heading-search:focus,
+#recent-search:focus {
     border-color: #4a90e2;
 }
 
@@ -548,50 +921,6 @@ body.focus-mode #editor .block.focus-active {
     background-color: #357abd;
 }
 
-.document-list {
-    max-height: 300px;
-    overflow-y: auto;
-    margin-bottom: 16px;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-}
-
-.document-item {
-    padding: 12px 16px;
-    cursor: pointer;
-    border-bottom: 1px solid #f0f0f0;
-    transition: background-color 0.15s ease;
-}
-
-.document-item:last-child {
-    border-bottom: none;
-}
-
-.document-item:hover {
-    background-color: #f5f5f5;
-}
-
-.document-item.selected {
-    background-color: #e8f4fd;
-}
-
-.document-item-name {
-    font-weight: 600;
-    font-size: 14px;
-    margin-bottom: 4px;
-}
-
-.document-item-date {
-    font-size: 12px;
-    color: #666;
-}
-
-.no-documents {
-    padding: 20px;
-    text-align: center;
-    color: #999;
-}
-
 /* Dark mode for modals */
 body.dark-mode .modal-content {
     background: #2d2d2d;
@@ -602,11 +931,9 @@ body.dark-mode .modal-content h3 {
     color: #e0e0e0;
 }
 
-body.dark-mode #save-name-input,
-body.dark-mode #load-search,
-body.dark-mode #delete-search,
 body.dark-mode #font-search,
 body.dark-mode #heading-search,
+body.dark-mode #recent-search,
 body.dark-mode #ephemeral-limit-input {
     background: #3d3d3d;
     color: #e0e0e0;
@@ -631,27 +958,6 @@ body.dark-mode .modal-button.primary {
 
 body.dark-mode .modal-button.primary:hover {
     background-color: #357abd;
-}
-
-body.dark-mode .document-list {
-    border-color: #555;
-    background: #2d2d2d;
-}
-
-body.dark-mode .document-item {
-    border-bottom-color: #444;
-}
-
-body.dark-mode .document-item:hover {
-    background-color: #3d3d3d;
-}
-
-body.dark-mode .document-item.selected {
-    background-color: #4d4d4d;
-}
-
-body.dark-mode .document-item-date {
-    color: #999;
 }
 
 /* Font list styling */

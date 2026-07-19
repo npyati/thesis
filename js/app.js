@@ -1,26 +1,28 @@
 // Main application entry point — wires modules together, sets up event listeners
 
 import state from './state.js';
-import { debounce } from './utils.js';
+import { debounce, readJSON, restoreSelection } from './utils.js';
 import { getEditor, getCurrentBlock, getSelectedBlocks, createBlockElement, updateNumberedBlocks, focusBlock } from './blocks.js';
 import { openModal, closeModal, closeOnClickOutside, attachModalKeyboardNav, showAlert, showConfirm } from './modals.js';
 import { applyFormatting, strikethroughLastWord, deleteAllStrikethrough } from './formatting.js';
 import {
     toggleForwardOnlyMode, toggleCenterMode, toggleFocusMode, toggleDarkMode,
-    togglePageStyle, toggleFullscreen, addCenterModeSpacers, removeCenterModeSpacers,
+    togglePageStyle, toggleFullscreen, addCenterModeSpacers,
     centerCurrentBlock, updateFocusParagraph, debouncedUpdateFocusParagraph,
-    createNewEphemeralDocument, enforceEphemeralLimit, applyEphemeralFading,
-    clearEphemeralFading, updateURL, clearURL, getDocIdFromURL,
-    updatePageTitle, clearPageTitle,
+    createNewEphemeralDocument, enforceEphemeralLimit,
+    applyStage, toggleSpellcheck, toggleBlindMode, updateBlindCount,
+    toggleFogMode, updateFogBlock,
 } from './modes.js';
+import { startRetype, retypeNext, retypePrev, endRetype, resumeRetypeIfActive, resumeRetype, recoverLastSource } from './retype.js';
 import {
-    loadContent, autoSave, saveContent, saveToFile, saveToNewFile,
-    importFromMarkdown, exportAsMarkdown, exportAllAsMarkdown, exportAsWord,
-    copyAll, copyAsMarkdown, clearAll, clearStorage,
-    getSavedDocuments, setSavedDocuments, performSave, quickSave,
-    loadDocumentByName, loadDocumentById, deleteDocumentByName,
-    migrateDocumentsWithIds, markdownToBlocks, restoreFileHandle,
+    loadContent, autoSave, saveToNewFile,
+    importFromMarkdown, exportAsMarkdown, exportAsWord,
+    copyAll, copyAsMarkdown, clearAll, clearStorage, quickSave,
+    markdownToBlocks, restoreFileHandle, openRecentFile, setSaveStatus,
 } from './io.js';
+import { getRecentFiles } from './db.js';
+import { recordCheckpoint, scheduleCheckpoint, undo as historyUndo, redo as historyRedo, resetHistory } from './history.js';
+import * as find from './find.js';
 
 const editor = getEditor();
 
@@ -38,7 +40,11 @@ const availableFonts = [
     'ui-monospace', 'serif', 'sans-serif', 'monospace', 'cursive', 'fantasy'
 ];
 
-function getAllFonts() { return [...state.customFonts, ...availableFonts]; }
+function getAllFonts() {
+    const all = [...state.customFonts, ...(state.installedFonts || []), ...availableFonts];
+    const seen = new Set();
+    return all.filter(f => { const key = f.toLowerCase(); if (seen.has(key)) return false; seen.add(key); return true; });
+}
 
 function isFontAvailable(fontName) {
     const testString = 'mmmmmmmmmmlli';
@@ -53,7 +59,7 @@ function isFontAvailable(fontName) {
     return detected;
 }
 
-function loadCustomFonts() { const saved = localStorage.getItem('customFonts'); if (saved) state.customFonts = JSON.parse(saved); }
+function loadCustomFonts() { state.customFonts = readJSON('customFonts', []); }
 function saveCustomFonts() { localStorage.setItem('customFonts', JSON.stringify(state.customFonts)); }
 function addCustomFont(fontName) {
     if (!fontName || getAllFonts().some(f => f.toLowerCase() === fontName.toLowerCase())) return false;
@@ -72,6 +78,11 @@ function increaseLineHeight() { state.currentLineHeight = Math.min(state.current
 function decreaseLineHeight() { state.currentLineHeight = Math.max(state.currentLineHeight - 0.1, 1.0); applyLineHeight(); }
 function applyLineHeight() { editor.style.lineHeight = state.currentLineHeight; localStorage.setItem('editorLineHeight', state.currentLineHeight); }
 function loadLineHeight() { const l = localStorage.getItem('editorLineHeight'); if (l) { state.currentLineHeight = parseFloat(l); editor.style.lineHeight = state.currentLineHeight; } }
+
+function increaseColumnWidth() { state.currentColumnWidth = Math.min(state.currentColumnWidth + 50, 1200); applyColumnWidth(); }
+function decreaseColumnWidth() { state.currentColumnWidth = Math.max(state.currentColumnWidth - 50, 400); applyColumnWidth(); }
+function applyColumnWidth() { document.documentElement.style.setProperty('--column-width', state.currentColumnWidth + 'px'); localStorage.setItem('editorColumnWidth', state.currentColumnWidth); }
+function loadColumnWidth() { const w = localStorage.getItem('editorColumnWidth'); if (w) { state.currentColumnWidth = parseInt(w); document.documentElement.style.setProperty('--column-width', state.currentColumnWidth + 'px'); } }
 
 // ──────────────────────────────────
 // Word count (debounced)
@@ -181,60 +192,104 @@ function openFontModal() {
 function closeFontModal() { closeModal(document.getElementById('font-modal')); }
 
 // ──────────────────────────────────
-// Document list rendering (shared pattern)
+// Recent files modal
 // ──────────────────────────────────
-function renderDocList(listEl, docs, selectedIndex, onClick) {
+let recentFilesCache = [];
+
+function filteredRecentFiles() {
+    const term = document.getElementById('recent-search').value.toLowerCase();
+    return recentFilesCache.filter(f => f.fileName.toLowerCase().includes(term));
+}
+
+function renderRecentList(files) {
+    const listEl = document.getElementById('recent-list');
     listEl.innerHTML = '';
-    if (docs.length === 0) { listEl.innerHTML = '<div class="no-documents">No documents found</div>'; return; }
-    docs.forEach((doc, i) => {
+    if (files.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'no-files';
+        empty.textContent = 'No matching files';
+        listEl.appendChild(empty);
+        return;
+    }
+    files.forEach((f, i) => {
         const item = document.createElement('div');
-        item.className = `document-item ${i === selectedIndex ? 'selected' : ''}`;
+        item.className = `file-item ${i === state.selectedRecentIndex ? 'selected' : ''}`;
         item.setAttribute('role', 'option');
         const name = document.createElement('div');
-        name.className = 'document-item-name';
-        name.textContent = doc.name;
+        name.className = 'file-item-name';
+        name.textContent = f.fileName;
         const date = document.createElement('div');
-        date.className = 'document-item-date';
-        date.textContent = new Date(doc.timestamp).toLocaleString();
+        date.className = 'file-item-date';
+        date.textContent = new Date(f.timestamp).toLocaleString();
         item.appendChild(name);
         item.appendChild(date);
-        item.addEventListener('click', () => onClick(doc));
+        item.addEventListener('click', () => pickRecentFile(f));
         listEl.appendChild(item);
     });
 }
 
-// ──────────────────────────────────
-// Save / Load / Delete document modals
-// ──────────────────────────────────
-function saveDocumentAs() {
-    const modal = document.getElementById('save-modal');
-    const input = document.getElementById('save-name-input');
-    input.value = '';
-    state.selectedSaveIndex = 0;
-    renderDocList(document.getElementById('save-list'), getSavedDocuments(), 0, (doc) => { input.value = doc.name; input.focus(); });
-    openModal(modal, input);
+async function pickRecentFile(entry) {
+    closeModal(document.getElementById('recent-modal'));
+    await openRecentFile(entry);
 }
 
-function loadDocument() {
-    const docs = getSavedDocuments();
-    if (docs.length === 0) { showAlert('No saved documents found.'); return; }
-    const modal = document.getElementById('load-modal');
-    const search = document.getElementById('load-search');
+async function openRecentModal() {
+    recentFilesCache = await getRecentFiles();
+    if (recentFilesCache.length === 0) {
+        await showAlert('No recent files yet — they appear here after you open or save a file.');
+        return;
+    }
+    state.selectedRecentIndex = 0;
+    const modal = document.getElementById('recent-modal');
+    const search = document.getElementById('recent-search');
     search.value = '';
-    state.selectedLoadIndex = 0;
-    renderDocList(document.getElementById('load-list'), docs, 0, (doc) => loadDocumentByName(doc.name));
+    renderRecentList(recentFilesCache);
     openModal(modal, search);
 }
 
-function deleteDocument() {
-    const docs = getSavedDocuments();
-    if (docs.length === 0) { showAlert('No saved documents found.'); return; }
-    const modal = document.getElementById('delete-modal');
-    const search = document.getElementById('delete-search');
-    search.value = '';
-    state.selectedDeleteIndex = 0;
-    renderDocList(document.getElementById('delete-list'), docs, 0, (doc) => deleteDocumentByName(doc.name));
-    openModal(modal, search);
+// ──────────────────────────────────
+// Find bar
+// ──────────────────────────────────
+function updateFindCount(result) {
+    const findCount = document.getElementById('find-count');
+    const findInput = document.getElementById('find-input');
+    findCount.textContent = result.total ? `${result.index + 1}/${result.total}` : (findInput.value ? '0' : '');
+}
+
+function openFindBar() {
+    const findBar = document.getElementById('find-bar');
+    const findInput = document.getElementById('find-input');
+    findBar.classList.remove('hidden');
+    findInput.value = '';
+    document.getElementById('find-count').textContent = '';
+    setTimeout(() => findInput.focus(), 0);
+}
+
+function closeFindBar(commit) {
+    find.close(commit);
+    document.getElementById('find-bar').classList.add('hidden');
+    editor.focus();
+}
+
+// ──────────────────────────────────
+// Undo / redo
+// ──────────────────────────────────
+function afterHistoryRestore() {
+    if (state.centerMode) addCenterModeSpacers();
+    updateNumberedBlocks();
+    autoSave();
+    updateFocusParagraph();
+    if (state.wordCountVisible) debouncedWordCount();
+}
+
+function doUndo() {
+    if (state.forwardOnlyMode || state.blindMode) return;
+    if (historyUndo()) afterHistoryRestore();
+}
+
+function doRedo() {
+    if (state.forwardOnlyMode || state.blindMode) return;
+    if (historyRedo()) afterHistoryRestore();
 }
 
 // ──────────────────────────────────
@@ -288,7 +343,7 @@ async function changeEphemeralWordLimit() {
             }
             state.EPHEMERAL_WORD_LIMIT = parsedLimit;
             localStorage.setItem('ephemeralWordLimit', parsedLimit);
-            if (state.currentDocumentIsEphemeral) { updateWordCount(); applyEphemeralFading(); }
+            if (state.currentDocumentIsEphemeral) updateWordCount();
             dialogModal.classList.add('hidden'); cleanup(); restoreCursor();
             await showAlert(`Ephemeral word limit changed to ${parsedLimit} words.`);
             resolve();
@@ -383,6 +438,7 @@ function convertToNormalText() {
 }
 
 function deleteBlocks() {
+    recordCheckpoint();
     let blocksToDelete;
     if (state.multiBlockSelection.length > 0) blocksToDelete = state.multiBlockSelection;
     else { const sel = getSelectedBlocks(); blocksToDelete = sel.length > 0 ? sel : [getCurrentBlock()]; }
@@ -400,24 +456,9 @@ function deleteBlocks() {
 }
 
 // ──────────────────────────────────
-// PWA install
-// ──────────────────────────────────
-async function installApp() {
-    if (state.deferredInstallPrompt) {
-        state.deferredInstallPrompt.prompt();
-        const { outcome } = await state.deferredInstallPrompt.userChoice;
-        if (outcome === 'accepted') state.deferredInstallPrompt = null;
-    } else if (window.matchMedia('(display-mode: standalone)').matches) {
-        await showAlert('thesis is already installed as an app.');
-    } else {
-        await showAlert('To install thesis as an app, use your browser\'s "Install" or "Add to Home Screen" option.');
-    }
-}
-
-// ──────────────────────────────────
 // Intro
 // ──────────────────────────────────
-const introHTML = `<p><strong>thesis</strong> is a minimalist text editor.</p><p>It's designed for focus and creativity.</p><p>The whole thing works primarily through the keyboard. You shouldn't have to use the mouse.</p><p>Here are the basics</p><ul><li>Type / to open a popup menu of commands. Use arrow keys or search to pick one. When search returns only one command, pressing [enter] will execute.</li><li>Type / again to close the popup. Press [space] at the empty prompt to keep the /.</li><li>Nothing is sent or saved online. All documents are stored locally in your browser.</li></ul><p>That's enough for now. You can find the rest by exploring. There isn't much - just what's necessary.</p><p><strong>This is a work in progress.</strong> There are still plenty of bugs to fix and improvements to make. Send me a note if you have ideas.</p>`;
+const introHTML = `<p><strong>thesis</strong> is a minimalist text editor, designed for focus and creativity.</p><p>It works through the keyboard — you shouldn't need the mouse. Type <strong>/</strong> to open the command menu, then search or use the arrow keys and press <strong>[enter]</strong>. Type <strong>/</strong> again to close it (press <strong>[space]</strong> at the empty prompt to keep a literal /).</p><p>Your writing saves automatically as you type — you never need to reach for Save. It's kept in this browser, and you can also <em>Open File</em> or <em>Save to File As…</em> to sync a real <strong>.md</strong> file on your computer. Nothing is ever sent online.</p><p>There are a few different ways to write, all in the / menu:</p><ul><li><strong>Stages</strong> — Draft, Revise, and Polish set the editor up for each phase of writing.</li><li><strong>Forward-only</strong> — type like a typewriter, with no going back.</li><li><strong>Blind</strong> — write without seeing anything; a running word count keeps you company.</li><li><strong>Ephemeral</strong> — the oldest words fade away as new ones arrive, leaving no record.</li><li><strong>Retype</strong> — redraft by retyping your old draft one paragraph at a time.</li><li><strong>Focus</strong> — fade or blur everything but the line you're on, or keep it centered.</li></ul><p>There's more to find — fonts, dark mode, find, export to Markdown or Word — but that's enough to start. There isn't much here, just what's necessary.</p><p><strong>This is a work in progress.</strong> Send me a note if you have ideas.</p>`;
 
 function showIntro() {
     document.getElementById('intro-text').innerHTML = introHTML;
@@ -427,46 +468,73 @@ function showIntro() {
 // ──────────────────────────────────
 // Commands
 // ──────────────────────────────────
+// Category order controls the grouping shown in the command menu
+const CATEGORY_ORDER = ['Document', 'Write', 'Format', 'Navigate', 'View', 'Share', 'App'];
+
 const commands = [
-    { name: 'Save', description: 'Save to current location (file or browser)', action: async () => { const result = await quickSave(); if (result === 'open-save-dialog') saveDocumentAs(); } },
-    { name: 'Save to Browser As...', description: 'Save to browser storage with a name', action: saveDocumentAs },
-    { name: 'Load from Browser', description: 'Load a document from browser storage', action: loadDocument },
-    { name: 'Delete Document', description: 'Delete a saved document', action: deleteDocument },
-    { name: 'New Ephemeral Document', description: 'Write in pure flow - oldest words fade away as new thoughts emerge', action: () => createNewEphemeralDocument(autoSave) },
-    { name: 'Change Ephemeral Word Limit', description: 'Set how many words linger before fading into the past', action: changeEphemeralWordLimit },
-    { name: 'Jump to Heading', description: 'Navigate to a heading in the document', action: openHeadingModal },
-    { name: 'Heading 1', description: 'Format current line(s) as large heading', action: () => applyHeading(1) },
-    { name: 'Heading 2', description: 'Format current line(s) as medium heading', action: () => applyHeading(2) },
-    { name: 'Heading 3', description: 'Format current line(s) as small heading', action: () => applyHeading(3) },
-    { name: 'Normal Text', description: 'Convert current line(s) to normal text', action: convertToNormalText },
-    { name: 'Bullet List', description: 'Toggle bullet list for current line(s)', action: () => toggleListType('bullet') },
-    { name: 'Numbered List', description: 'Toggle numbered list for current line(s)', action: () => toggleListType('numbered') },
-    { name: 'Block Quote', description: 'Format current line(s) as a block quote', action: applyBlockQuote },
-    { name: 'Strikethrough Last Word', description: 'Apply strikethrough to the last typed word (type xxxx)', action: strikethroughLastWord },
-    { name: 'Delete All Strikethrough', description: 'Remove all struck-through words from document', action: deleteAllStrikethrough },
-    { name: 'Change Font', description: 'Select font for the editor', action: openFontModal },
-    { name: 'Increase Font Size', description: 'Make text larger (Ctrl/Cmd + +)', action: increaseFontSize },
-    { name: 'Decrease Font Size', description: 'Make text smaller (Ctrl/Cmd + -)', action: decreaseFontSize },
-    { name: 'Increase Line Height', description: 'Make text more spacious (Ctrl/Cmd + ])', action: increaseLineHeight },
-    { name: 'Decrease Line Height', description: 'Make text more compact (Ctrl/Cmd + [)', action: decreaseLineHeight },
-    { name: 'Toggle Forward-Only Mode', description: 'Prevent backspace, deletion, and cursor movement', action: toggleForwardOnlyMode },
-    { name: 'Toggle Center Mode', description: 'Keep active line centered in viewport', action: toggleCenterMode },
-    { name: 'Toggle Focus Mode', description: 'Fade non-active paragraphs', action: toggleFocusMode },
-    { name: 'Toggle Page Style', description: 'Switch between page and canvas view', action: togglePageStyle },
-    { name: 'Toggle Fullscreen', description: 'Enter/exit fullscreen mode (F11)', action: toggleFullscreen },
-    { name: 'Toggle Dark Mode', description: 'Switch between light and dark theme', action: toggleDarkMode },
-    { name: 'Toggle Word Count', description: 'Show/hide word and character count', action: showWordCountToggle },
-    { name: 'New Document', description: 'Start a new document', action: clearAll },
-    { name: 'Copy All', description: 'Copy all content to clipboard', action: copyAll },
-    { name: 'Export as Word', description: 'Download content as Word (.docx) file', action: exportAsWord },
-    { name: 'Export All as Markdown', description: 'Download all saved documents as .md files in a ZIP', action: exportAllAsMarkdown },
-    { name: 'Copy as Markdown', description: 'Copy content as Markdown to clipboard', action: copyAsMarkdown },
-    { name: 'Open File', description: 'Open and auto-sync with a .md file on disk', action: importFromMarkdown },
-    { name: 'Save to File As...', description: 'Save and auto-sync to a .md file on disk', action: saveToNewFile },
-    { name: 'Delete Block', description: 'Delete current block or selected blocks', action: deleteBlocks },
-    { name: 'Show Intro', description: 'What is this?', action: showIntro },
-    { name: 'Clear Storage', description: 'Clear auto-save from browser memory', action: clearStorage },
-    { name: 'Install App', description: 'Install thesis as a standalone app (no browser chrome)', action: installApp },
+    // Document
+    { name: 'Save', description: 'Save to the current file (or choose one)', action: quickSave, category: 'Document' },
+    { name: 'Open File', description: 'Open and auto-sync with a .md file on disk', action: importFromMarkdown, category: 'Document' },
+    { name: 'Open Recent', description: 'Reopen a recently used file', action: openRecentModal, category: 'Document' },
+    { name: 'Save to File As...', description: 'Save and auto-sync to a new .md file on disk', action: saveToNewFile, category: 'Document' },
+    { name: 'New Document', description: 'Start a new document', action: clearAll, category: 'Document' },
+    { name: 'New Ephemeral Document', description: 'Write in pure flow - oldest words dissolve as new thoughts emerge', action: () => { createNewEphemeralDocument(autoSave); setSaveStatus('hidden'); }, category: 'Document' },
+
+    // Write
+    { name: 'Draft Stage', description: 'Forward-only, focus mode, no spellcheck — just get words out', action: () => applyStage('draft'), category: 'Write' },
+    { name: 'Revise Stage', description: 'Unlock editing and see the whole document', action: () => applyStage('revise'), category: 'Write' },
+    { name: 'Polish Stage', description: 'Spellcheck on for the final pass', action: () => applyStage('polish'), category: 'Write' },
+    { name: 'Retype Document', description: 'Redraft by retyping — the old draft shows a paragraph at a time while you type it fresh', action: () => startRetype(showAlert), category: 'Write' },
+    { name: 'Resume Retype', description: 'Reopen the retype bar where you left off (undo an accidental ⌘.)', action: () => resumeRetype(showAlert), category: 'Write' },
+    { name: 'Recover Last Retype Source', description: 'Load the old draft from your last retype back into the editor', action: () => recoverLastSource(showAlert, showConfirm), category: 'Write' },
+    { name: 'End Retype', description: 'Finish retyping and keep the new draft', action: endRetype, category: 'Write' },
+    { name: 'Toggle Blind Mode', description: 'Write without seeing anything — a running word count keeps you company', action: toggleBlindMode, category: 'Write' },
+    { name: 'Toggle Forward-Only Mode', description: 'Prevent backspace, deletion, and cursor movement', action: toggleForwardOnlyMode, category: 'Write' },
+    { name: 'Change Ephemeral Word Limit', description: 'Set how many words linger before fading into the past', action: changeEphemeralWordLimit, category: 'Write' },
+
+    // Format
+    { name: 'Heading 1', description: 'Format current line(s) as large heading', action: () => applyHeading(1), category: 'Format' },
+    { name: 'Heading 2', description: 'Format current line(s) as medium heading', action: () => applyHeading(2), category: 'Format' },
+    { name: 'Heading 3', description: 'Format current line(s) as small heading', action: () => applyHeading(3), category: 'Format' },
+    { name: 'Normal Text', description: 'Convert current line(s) to normal text', action: convertToNormalText, category: 'Format' },
+    { name: 'Bullet List', description: 'Toggle bullet list for current line(s)', action: () => toggleListType('bullet'), category: 'Format' },
+    { name: 'Numbered List', description: 'Toggle numbered list for current line(s)', action: () => toggleListType('numbered'), category: 'Format' },
+    { name: 'Block Quote', description: 'Format current line(s) as a block quote', action: applyBlockQuote, category: 'Format' },
+    { name: 'Strikethrough Last Word', description: 'Apply strikethrough to the last typed word (type xxxx)', action: strikethroughLastWord, category: 'Format' },
+    { name: 'Delete All Strikethrough', description: 'Remove all struck-through words from document', action: deleteAllStrikethrough, category: 'Format' },
+    { name: 'Delete Block', description: 'Delete current block or selected blocks', action: deleteBlocks, category: 'Format' },
+
+    // Navigate
+    { name: 'Find', description: 'Find text in the document (Cmd+F)', action: openFindBar, category: 'Navigate' },
+    { name: 'Jump to Heading', description: 'Navigate to a heading in the document', action: openHeadingModal, category: 'Navigate' },
+
+    // View
+    { name: 'Toggle Fade Focus', description: 'Fade the paragraphs around the one you\'re on', action: toggleFocusMode, category: 'View' },
+    { name: 'Toggle Fog Focus', description: 'Blur everything but the line you\'re writing', action: toggleFogMode, category: 'View' },
+    { name: 'Toggle Center Mode', description: 'Keep active line centered in viewport', action: toggleCenterMode, category: 'View' },
+    { name: 'Toggle Page Style', description: 'Switch between page and canvas view', action: togglePageStyle, category: 'View' },
+    { name: 'Toggle Dark Mode', description: 'Switch between light and dark theme', action: toggleDarkMode, category: 'View' },
+    { name: 'Toggle Fullscreen', description: 'Enter/exit fullscreen mode (F11)', action: toggleFullscreen, category: 'View' },
+    { name: 'Toggle Spellcheck', description: 'Show or hide spelling squiggles', action: toggleSpellcheck, category: 'View' },
+    { name: 'Toggle Word Count', description: 'Show/hide word and character count', action: showWordCountToggle, category: 'View' },
+    { name: 'Change Font', description: 'Select font for the editor', action: openFontModal, category: 'View' },
+    { name: 'Increase Font Size', description: 'Make text larger (Ctrl/Cmd + +)', action: increaseFontSize, category: 'View' },
+    { name: 'Decrease Font Size', description: 'Make text smaller (Ctrl/Cmd + -)', action: decreaseFontSize, category: 'View' },
+    { name: 'Increase Line Height', description: 'Make text more spacious (Ctrl/Cmd + ])', action: increaseLineHeight, category: 'View' },
+    { name: 'Decrease Line Height', description: 'Make text more compact (Ctrl/Cmd + [)', action: decreaseLineHeight, category: 'View' },
+    { name: 'Widen Text Column', description: 'Make the text column wider (Ctrl/Cmd + Shift + ])', action: increaseColumnWidth, category: 'View' },
+    { name: 'Narrow Text Column', description: 'Make the text column narrower (Ctrl/Cmd + Shift + [)', action: decreaseColumnWidth, category: 'View' },
+
+    // Share
+    { name: 'Copy All', description: 'Copy all content to clipboard', action: copyAll, category: 'Share' },
+    { name: 'Copy as Markdown', description: 'Copy content as Markdown to clipboard', action: copyAsMarkdown, category: 'Share' },
+    { name: 'Export as Markdown', description: 'Download a copy as a .md file', action: exportAsMarkdown, category: 'Share' },
+    { name: 'Export as Word', description: 'Download content as Word (.docx) file', action: exportAsWord, category: 'Share' },
+    { name: 'Print', description: 'Print the document or save as PDF', action: () => window.print(), category: 'Share' },
+
+    // App
+    { name: 'Show Intro', description: 'What is this?', action: showIntro, category: 'App' },
+    { name: 'Clear Storage', description: 'Clear the autosaved draft from browser memory', action: clearStorage, category: 'App' },
 ];
 
 // ──────────────────────────────────
@@ -478,50 +546,59 @@ const commandList = document.getElementById('command-list');
 const modeStatus = document.getElementById('mode-status');
 
 function filterCommands(searchTerm) {
-    const commandUsage = JSON.parse(localStorage.getItem('commandUsage') || '{}');
-    const filtered = commands.filter(cmd =>
-        cmd.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        cmd.description.toLowerCase().includes(searchTerm.toLowerCase())
-    );
-    filtered.sort((a, b) => (commandUsage[b.name] || 0) - (commandUsage[a.name] || 0));
+    const term = searchTerm.toLowerCase().trim();
+    const matches = (cmd) =>
+        cmd.name.toLowerCase().includes(term) || cmd.description.toLowerCase().includes(term);
 
-    if (state.currentDocumentName) {
-        const qsc = {
-            name: `Save to <em style="font-style: italic; opacity: 0.75;">${state.currentDocumentName}</em>`,
-            description: 'Quick save to current document (Cmd+S)',
-            action: async () => { const result = await quickSave(); if (result === 'open-save-dialog') saveDocumentAs(); },
-            isQuickSave: true
-        };
-        if (!searchTerm || `save to ${state.currentDocumentName}`.toLowerCase().includes(searchTerm.toLowerCase())) {
-            filtered.unshift(qsc);
+    // Build a flat display order grouped by category, plus header markers
+    const entries = [];
+    const flat = [];
+    for (const category of CATEGORY_ORDER) {
+        const inCategory = commands.filter(c => c.category === category && matches(c));
+        if (inCategory.length === 0) continue;
+        entries.push({ header: category });
+        for (const command of inCategory) {
+            entries.push({ command });
+            flat.push(command);
         }
     }
 
-    state.filteredCommandsList = filtered;
+    state.filteredCommandsList = flat;
     state.selectedCommandIndex = 0;
-    renderCommands(filtered);
+    renderCommands(entries);
 }
 
-function renderCommands(filteredCommands) {
+function renderCommands(entries) {
     commandList.innerHTML = '';
     commandList.setAttribute('role', 'listbox');
     commandList.setAttribute('aria-label', 'Commands');
 
-    if (filteredCommands.length === 0) {
+    if (!entries.some(e => e.command)) {
         commandList.innerHTML = '<div class="command-item no-results" role="option">No commands found</div>';
         return;
     }
 
-    filteredCommands.forEach((command, index) => {
+    let index = 0;
+    entries.forEach(entry => {
+        if (entry.header) {
+            const header = document.createElement('div');
+            header.className = 'command-group';
+            header.setAttribute('role', 'presentation');
+            header.textContent = entry.header;
+            commandList.appendChild(header);
+            return;
+        }
+
+        const command = entry.command;
+        const i = index++;
         const item = document.createElement('div');
-        item.className = `command-item ${index === state.selectedCommandIndex ? 'selected' : ''}`;
+        item.className = `command-item ${i === state.selectedCommandIndex ? 'selected' : ''}`;
         item.setAttribute('role', 'option');
-        item.setAttribute('aria-selected', index === state.selectedCommandIndex);
+        item.setAttribute('aria-selected', i === state.selectedCommandIndex);
 
         const nameEl = document.createElement('div');
         nameEl.className = 'command-name';
-        if (command.isQuickSave) nameEl.innerHTML = command.name;
-        else nameEl.textContent = command.name;
+        nameEl.textContent = command.name;
 
         const descEl = document.createElement('div');
         descEl.className = 'command-description';
@@ -534,23 +611,68 @@ function renderCommands(filteredCommands) {
     });
 }
 
+// Save-state line + active-mode pills at the top of the palette
+function renderStatusHeader() {
+    modeStatus.innerHTML = '';
+    let shown = false;
+
+    if (state.saveStatus !== 'hidden') {
+        const line = document.createElement('div');
+        line.className = `save-line ${state.saveStatus}`;
+        const dot = document.createElement('span');
+        dot.className = 'save-dot';
+        const text = document.createElement('span');
+        if (state.saveStatus === 'detached') text.textContent = 'Not connected to a file';
+        else if (state.saveStatus === 'saving') text.textContent = 'Saving…';
+        else text.textContent = state.currentFileName ? `Saved to ${state.currentFileName}` : 'Saved';
+        line.appendChild(dot);
+        line.appendChild(text);
+        modeStatus.appendChild(line);
+        shown = true;
+    }
+
+    const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+    const modes = [];
+    if (state.currentStage) modes.push(`${cap(state.currentStage)} stage`);
+    if (state.retypeActive) modes.push('Retype');
+    if (state.blindMode) modes.push('Blind');
+    if (state.focusMode) modes.push('Fade focus');
+    if (state.fogMode) modes.push('Fog focus');
+    if (state.centerMode) modes.push('Center');
+    if (state.forwardOnlyMode) modes.push('Forward-only');
+    if (state.currentDocumentIsEphemeral) modes.push('Ephemeral');
+    if (document.body.classList.contains('dark-mode')) modes.push('Dark');
+    if (state.wordCountVisible) modes.push('Word count');
+
+    if (modes.length > 0) {
+        const row = document.createElement('div');
+        row.className = 'mode-badges';
+        modes.forEach(m => {
+            const badge = document.createElement('span');
+            badge.className = 'mode-badge';
+            badge.setAttribute('role', 'status');
+            badge.textContent = m;
+            row.appendChild(badge);
+        });
+        modeStatus.appendChild(row);
+        shown = true;
+    }
+
+    modeStatus.style.display = shown ? 'block' : 'none';
+}
+
 function executeCommand(command) {
     if (state.savedSelection) {
-        try { const s = window.getSelection(); s.removeAllRanges(); s.addRange(state.savedSelection); state.savedSelection = null; }
-        catch (e) { console.error('Error restoring cursor:', e); }
+        restoreSelection(state.savedSelection);
+        state.savedSelection = null;
     }
     state.slashPosition = null;
     state.commandModalOpen = false;
     commandModal.classList.add('hidden');
     state.multiBlockSelection = [];
 
+    recordCheckpoint();
     command.action();
-
-    try {
-        const usage = JSON.parse(localStorage.getItem('commandUsage') || '{}');
-        usage[command.name] = Date.now();
-        localStorage.setItem('commandUsage', JSON.stringify(usage));
-    } catch (e) {}
 
     editor.focus();
 }
@@ -563,22 +685,7 @@ function showCommandModal() {
     filterCommands('');
     state.selectedCommandIndex = 0;
 
-    // Mode status badges
-    const modes = [];
-    if (state.focusMode) modes.push('Focus');
-    if (state.centerMode) modes.push('Center');
-    if (state.forwardOnlyMode) modes.push('Forward-Only');
-    if (state.currentDocumentIsEphemeral) modes.push('Ephemeral');
-    if (document.body.classList.contains('dark-mode')) modes.push('Dark');
-    if (state.wordCountVisible) modes.push('Word Count');
-
-    if (modes.length > 0) {
-        modeStatus.innerHTML = modes.map(m => `<span class="mode-badge" role="status">${m}</span>`).join('');
-        modeStatus.style.display = 'flex';
-    } else {
-        modeStatus.innerHTML = '';
-        modeStatus.style.display = 'none';
-    }
+    renderStatusHeader();
 
     // Position modal near cursor
     setTimeout(() => {
@@ -633,9 +740,11 @@ function hideCommandModal() {
     state.multiBlockSelection = [];
 
     if (state.savedSelection) {
-        try { const s = window.getSelection(); s.removeAllRanges(); s.addRange(state.savedSelection); state.savedSelection = null; }
-        catch (e) { editor.focus(); }
-    } else { editor.focus(); }
+        if (!restoreSelection(state.savedSelection)) editor.focus();
+        state.savedSelection = null;
+    } else {
+        editor.focus();
+    }
 }
 
 // ──────────────────────────────────
@@ -684,6 +793,13 @@ document.addEventListener('click', (event) => {
 // Editor keydown handler
 // ──────────────────────────────────
 editor.addEventListener('keydown', (event) => {
+    // Retype navigation (⌘↓ / ⌘↑ / ⌘.)
+    if (state.retypeActive && (event.metaKey || event.ctrlKey)) {
+        if (event.key === 'ArrowDown') { event.preventDefault(); retypeNext(); return; }
+        if (event.key === 'ArrowUp') { event.preventDefault(); retypePrev(); return; }
+        if (event.key === '.') { event.preventDefault(); endRetype(); return; }
+    }
+
     // Center mode: prevent cursor from entering spacers
     if (state.centerMode && (event.key === 'ArrowUp' || event.key === 'ArrowDown' || event.key === 'Home' || event.key === 'End')) {
         const currentBlock = getCurrentBlock();
@@ -746,8 +862,8 @@ editor.addEventListener('keydown', (event) => {
         }
     }
 
-    // Forward-only mode blocks
-    if (state.forwardOnlyMode) {
+    // Forward-only mode blocks (blind mode enforces the same: no unseen edits)
+    if (state.forwardOnlyMode || state.blindMode) {
         if (['Backspace', 'Delete'].includes(event.key)) { event.preventDefault(); return; }
         if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown', 'Tab'].includes(event.key)) { event.preventDefault(); return; }
         if ((event.ctrlKey || event.metaKey) && event.key === 'a') { event.preventDefault(); return; }
@@ -759,6 +875,7 @@ editor.addEventListener('keydown', (event) => {
         event.preventDefault();
         const cb = getCurrentBlock(); if (!cb) return;
         const ce = cb.querySelector('.block-content'); if (!ce) return;
+        recordCheckpoint();
         const tc = ce.textContent || '';
         const type = cb.dataset.type;
 
@@ -773,8 +890,11 @@ editor.addEventListener('keydown', (event) => {
         const afterRange = range.cloneRange();
         afterRange.selectNodeContents(ce);
         afterRange.setStart(range.startContainer, range.startOffset);
-        const afterContent = afterRange.toString();
-        afterRange.deleteContents();
+        // Extract as a fragment so inline formatting survives the split
+        const fragment = afterRange.extractContents();
+        const temp = document.createElement('div');
+        temp.appendChild(fragment);
+        const afterContent = temp.innerHTML;
         if (ce.childNodes.length === 0) ce.innerHTML = '<br>';
 
         const newType = (type === 'bullet' || type === 'numbered') ? type : 'text';
@@ -784,6 +904,31 @@ editor.addEventListener('keydown', (event) => {
         if (type === 'numbered' || newType === 'numbered') updateNumberedBlocks();
         focusBlock(nb);
         return;
+    }
+
+    // Select-all delete: with center-mode spacers the range roots at the editor
+    // itself and WebKit refuses to delete it — perform the wipe ourselves
+    if (event.key === 'Backspace' || event.key === 'Delete') {
+        const sel = window.getSelection();
+        if (sel.rangeCount && !sel.isCollapsed) {
+            const r = sel.getRangeAt(0);
+            const blocks = editor.querySelectorAll('.block');
+            if (r.startContainer === editor && r.endContainer === editor && blocks.length > 0
+                && r.intersectsNode(blocks[0]) && r.intersectsNode(blocks[blocks.length - 1])) {
+                event.preventDefault();
+                recordCheckpoint();
+                editor.innerHTML = '';
+                const nb = createBlockElement('text', '');
+                editor.appendChild(nb);
+                if (state.centerMode) addCenterModeSpacers();
+                const bc = nb.querySelector('.block-content');
+                const nr = document.createRange();
+                nr.selectNodeContents(bc); nr.collapse(true);
+                sel.removeAllRanges(); sel.addRange(nr);
+                autoSave();
+                return;
+            }
+        }
     }
 
     // Backspace — merge blocks
@@ -796,31 +941,40 @@ editor.addEventListener('keydown', (event) => {
         if (allBlocks.length === 1 && (!ce.textContent || ce.textContent.trim() === '')) { event.preventDefault(); return; }
 
         const range = sel.getRangeAt(0);
-        if (range.startOffset === 0 && range.startContainer === ce.firstChild) {
+        // At block start: offset 0 and no earlier siblings anywhere up to the content root
+        const isAtBlockStart = () => {
+            if (range.startOffset !== 0) return false;
+            let node = range.startContainer;
+            while (node && node !== ce) {
+                if (node.previousSibling) return false;
+                node = node.parentNode;
+            }
+            return node === ce;
+        };
+        if (isAtBlockStart()) {
             event.preventDefault();
             const prev = cb.previousElementSibling;
-            if (!prev) return;
+            if (!prev || !prev.classList.contains('block')) return;
             const pce = prev.querySelector('.block-content'); if (!pce) return;
-            const prevLen = pce.textContent?.length || 0;
+            recordCheckpoint();
             if (pce.lastChild && pce.lastChild.nodeName === 'BR') pce.removeChild(pce.lastChild);
-            const cc = ce.textContent || '';
-            if (cc.length > 0) pce.appendChild(document.createTextNode(cc));
+
+            // Move child nodes across so inline formatting survives the merge
+            const anchor = pce.lastChild;
+            while (ce.firstChild) {
+                if (ce.firstChild.nodeName === 'BR') { ce.removeChild(ce.firstChild); continue; }
+                pce.appendChild(ce.firstChild);
+            }
             cb.remove();
+            if (pce.childNodes.length === 0) pce.innerHTML = '<br>';
             updateNumberedBlocks();
 
-            requestAnimationFrame(() => {
-                let targetNode = null, targetOffset = prevLen, currentOffset = 0;
-                for (const child of pce.childNodes) {
-                    if (child.nodeType === Node.TEXT_NODE) {
-                        const nl = child.textContent.length;
-                        if (currentOffset + nl >= prevLen) { targetNode = child; targetOffset = prevLen - currentOffset; break; }
-                        currentOffset += nl;
-                    }
-                }
-                if (!targetNode) { targetNode = document.createTextNode(''); pce.appendChild(targetNode); targetOffset = 0; }
-                const r = document.createRange(); r.setStart(targetNode, targetOffset); r.collapse(true);
-                sel.removeAllRanges(); sel.addRange(r);
-            });
+            const r = document.createRange();
+            if (anchor && anchor.parentNode === pce) r.setStartAfter(anchor);
+            else r.setStart(pce, 0);
+            r.collapse(true);
+            sel.removeAllRanges(); sel.addRange(r);
+            autoSave();
             return;
         }
     }
@@ -842,6 +996,7 @@ editor.addEventListener('keydown', (event) => {
         const sel = getSelectedBlocks();
         const blocks = sel.length > 1 ? sel : [getCurrentBlock()];
         if (!blocks[0]) return;
+        recordCheckpoint();
         blocks.forEach(b => {
             const level = parseInt(b.dataset.level) || 0;
             b.dataset.level = event.shiftKey ? Math.max(0, level - 1) : level + 1;
@@ -855,31 +1010,52 @@ editor.addEventListener('keydown', (event) => {
         const sel = window.getSelection(); if (!sel.rangeCount) return;
         const cb = getCurrentBlock(); if (!cb) return;
         const ce = cb.querySelector('.block-content'); if (!ce) return;
-        const rects = sel.getRangeAt(0).getClientRects(); if (rects.length === 0) return;
-        const cr = rects[0];
-        const lh = parseInt(window.getComputedStyle(ce).lineHeight) || 20;
-        const tr = document.caretRangeFromPoint(cr.left, cr.top - lh);
-        if (tr && ce.contains(tr.startContainer)) { event.preventDefault(); sel.removeAllRanges(); sel.addRange(tr); return; }
-        const prev = cb.previousElementSibling;
+        const rects = sel.getRangeAt(0).getClientRects();
+        if (rects.length > 0) {
+            const cr = rects[0];
+            const lh = parseInt(window.getComputedStyle(ce).lineHeight) || 20;
+            const tr = document.caretRangeFromPoint(cr.left, cr.top - lh);
+            if (tr && ce.contains(tr.startContainer)) { event.preventDefault(); sel.removeAllRanges(); sel.addRange(tr); return; }
+        }
+        // Siblings may be non-blocks (center-mode spacers) — only focus real blocks
+        let prev = cb.previousElementSibling;
+        while (prev && !(prev.classList && prev.classList.contains('block'))) prev = prev.previousElementSibling;
         if (prev) { event.preventDefault(); focusBlock(prev, true); return; }
+        // Top of document — park the caret at the start rather than let the browser drop it
+        event.preventDefault();
+        const r = document.createRange();
+        r.selectNodeContents(ce); r.collapse(true);
+        sel.removeAllRanges(); sel.addRange(r);
+        return;
     }
 
     if (event.key === 'ArrowDown' && !event.altKey && !event.shiftKey && !event.ctrlKey && !event.metaKey) {
         const sel = window.getSelection(); if (!sel.rangeCount) return;
         const cb = getCurrentBlock(); if (!cb) return;
         const ce = cb.querySelector('.block-content'); if (!ce) return;
-        const rects = sel.getRangeAt(0).getClientRects(); if (rects.length === 0) return;
-        const cr = rects[0];
-        const lh = parseInt(window.getComputedStyle(ce).lineHeight) || 20;
-        const tr = document.caretRangeFromPoint(cr.left, cr.bottom + lh);
-        if (tr && ce.contains(tr.startContainer)) { event.preventDefault(); sel.removeAllRanges(); sel.addRange(tr); return; }
-        const next = cb.nextElementSibling;
+        const rects = sel.getRangeAt(0).getClientRects();
+        if (rects.length > 0) {
+            const cr = rects[0];
+            const lh = parseInt(window.getComputedStyle(ce).lineHeight) || 20;
+            const tr = document.caretRangeFromPoint(cr.left, cr.bottom + lh);
+            if (tr && ce.contains(tr.startContainer)) { event.preventDefault(); sel.removeAllRanges(); sel.addRange(tr); return; }
+        }
+        // Siblings may be non-blocks (center-mode spacers) — only focus real blocks
+        let next = cb.nextElementSibling;
+        while (next && !(next.classList && next.classList.contains('block'))) next = next.nextElementSibling;
         if (next) { event.preventDefault(); focusBlock(next, false); return; }
+        // End of document — park the caret at the end rather than let the browser drop it
+        event.preventDefault();
+        const r = document.createRange();
+        r.selectNodeContents(ce); r.collapse(false);
+        sel.removeAllRanges(); sel.addRange(r);
+        return;
     }
 
     // Alt+Arrow — move blocks
     if (event.altKey && !event.shiftKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
         event.preventDefault();
+        recordCheckpoint();
         let blocks;
         if (state.multiBlockSelection.length > 0) blocks = state.multiBlockSelection;
         else { const sel = getSelectedBlocks(); blocks = sel.length > 1 ? sel : [getCurrentBlock()]; }
@@ -904,29 +1080,40 @@ editor.addEventListener('keydown', (event) => {
         return;
     }
 
+    // Cmd+Z / Cmd+Shift+Z — undo/redo (blocked in forward-only mode)
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'z') {
+        event.preventDefault();
+        if (event.shiftKey) doRedo(); else doUndo();
+        return;
+    }
+
     // Cmd+D — delete block
     if ((event.ctrlKey || event.metaKey) && event.key === 'd') { event.preventDefault(); deleteBlocks(); return; }
 
     // Cmd+B / Cmd+I — formatting
-    if ((event.ctrlKey || event.metaKey) && event.key === 'b') { event.preventDefault(); applyFormatting('bold'); return; }
-    if ((event.ctrlKey || event.metaKey) && event.key === 'i') { event.preventDefault(); applyFormatting('italic'); return; }
+    if ((event.ctrlKey || event.metaKey) && event.key === 'b') { event.preventDefault(); recordCheckpoint(); applyFormatting('bold'); return; }
+    if ((event.ctrlKey || event.metaKey) && event.key === 'i') { event.preventDefault(); recordCheckpoint(); applyFormatting('italic'); return; }
 
     // Font size shortcuts
     if ((event.ctrlKey || event.metaKey) && (event.key === '=' || event.key === '+')) { event.preventDefault(); increaseFontSize(); return; }
     if ((event.ctrlKey || event.metaKey) && (event.key === '-' || event.key === '_')) { event.preventDefault(); decreaseFontSize(); return; }
     if ((event.ctrlKey || event.metaKey) && event.key === ']') { event.preventDefault(); increaseLineHeight(); return; }
     if ((event.ctrlKey || event.metaKey) && event.key === '[') { event.preventDefault(); decreaseLineHeight(); return; }
+    if ((event.ctrlKey || event.metaKey) && (event.key === '}' || (event.shiftKey && event.code === 'BracketRight'))) { event.preventDefault(); increaseColumnWidth(); return; }
+    if ((event.ctrlKey || event.metaKey) && (event.key === '{' || (event.shiftKey && event.code === 'BracketLeft'))) { event.preventDefault(); decreaseColumnWidth(); return; }
 
     // Cmd+S — save
-    if ((event.metaKey || event.ctrlKey) && event.key === 's') { event.preventDefault(); quickSave().then(r => { if (r === 'open-save-dialog') saveDocumentAs(); }); return; }
+    if ((event.metaKey || event.ctrlKey) && event.key === 's') { event.preventDefault(); quickSave(); return; }
+
+    // Cmd+F — find
+    if ((event.metaKey || event.ctrlKey) && event.key === 'f') { event.preventDefault(); openFindBar(); return; }
 
     // F11 — fullscreen
     if (event.key === 'F11') { event.preventDefault(); toggleFullscreen(); return; }
 
     // Slash — command modal
     const introModal = document.getElementById('intro-modal');
-    const deletedDocModal = document.getElementById('deleted-doc-modal');
-    if (event.key === '/' && !state.commandModalOpen && introModal.classList.contains('hidden') && deletedDocModal.classList.contains('hidden')) {
+    if (event.key === '/' && !state.commandModalOpen && introModal.classList.contains('hidden')) {
         event.preventDefault();
         event.stopPropagation();
         event.stopImmediatePropagation();
@@ -1023,6 +1210,12 @@ editor.addEventListener('beforeinput', (event) => {
     }
 });
 
+// Route native undo/redo (menu or platform gestures) through our history
+editor.addEventListener('beforeinput', (event) => {
+    if (event.inputType === 'historyUndo') { event.preventDefault(); doUndo(); }
+    else if (event.inputType === 'historyRedo') { event.preventDefault(); doRedo(); }
+});
+
 // Prevent typing outside blocks
 editor.addEventListener('beforeinput', (event) => {
     if (!event.inputType.startsWith('insert') && !event.inputType.startsWith('delete')) return;
@@ -1036,15 +1229,39 @@ editor.addEventListener('beforeinput', (event) => {
         el = el.parentElement;
     }
     if (!inside) {
-        event.preventDefault();
-        const fb = editor.querySelector('.block');
-        if (fb) focusBlock(fb);
-        else { const nb = createBlockElement('text', ''); editor.appendChild(nb); focusBlock(nb); }
+        let fb = editor.querySelector('.block');
+        if (!fb) { fb = createBlockElement('text', ''); editor.appendChild(fb); }
+        // Move the caret synchronously (focusBlock's rAF is too late) and let inserts
+        // proceed there so the first keystroke isn't swallowed; deletes stay blocked
+        const bc = fb.querySelector('.block-content');
+        if (bc) {
+            const r = document.createRange();
+            r.selectNodeContents(bc); r.collapse(true);
+            sel.removeAllRanges(); sel.addRange(r);
+        }
+        if (event.inputType.startsWith('delete')) event.preventDefault();
     }
 });
 
 // Editor input handler
 editor.addEventListener('input', (event) => {
+    // Deleting everything removes the last block and leaves the caret in the bare
+    // editor, above where a first line renders — rebuild immediately, caret inside
+    if (!editor.querySelector('.block')) {
+        editor.innerHTML = '';
+        const nb = createBlockElement('text', '');
+        editor.appendChild(nb);
+        if (state.centerMode) addCenterModeSpacers();
+        const bc = nb.querySelector('.block-content');
+        const r = document.createRange();
+        r.selectNodeContents(bc); r.collapse(true);
+        const s = window.getSelection();
+        s.removeAllRanges(); s.addRange(r);
+    }
+    scheduleCheckpoint();
+    if (state.blindMode) updateBlindCount();
+    if (!document.getElementById('find-bar').classList.contains('hidden')) closeFindBar(false);
+
     // Strikethrough trigger (xxxx)
     const sel = window.getSelection();
     if (sel.rangeCount > 0) {
@@ -1095,8 +1312,6 @@ editor.addEventListener('input', (event) => {
     // Enforce ephemeral limit (only on insertions)
     const isDeletion = event.inputType && (event.inputType.startsWith('delete') || event.inputType === 'historyUndo');
     if (!isDeletion) enforceEphemeralLimit();
-
-    applyEphemeralFading();
 });
 
 // Copy handler
@@ -1116,8 +1331,9 @@ editor.addEventListener('copy', (event) => {
         const ce = block.querySelector('.block-content'); if (!ce) return;
         const type = block.dataset.type;
         const level = parseInt(block.dataset.level) || 0;
-        const content = ce.textContent || '';
-        textParts.push(content);
+        // innerHTML preserves inline formatting; textContent for the plain-text flavor
+        const content = ce.innerHTML === '<br>' ? '' : ce.innerHTML;
+        textParts.push(ce.textContent || '');
 
         if (type === 'bullet' || type === 'numbered') {
             const lt = type === 'bullet' ? 'ul' : 'ol';
@@ -1128,6 +1344,13 @@ editor.addEventListener('copy', (event) => {
                 htmlParts.push(`<${lt}>`); listStack.push({ type: lt, level });
             } else if (listStack.length > 0) htmlParts.push('</li>');
             htmlParts.push(`<li>${content}`);
+        } else if (type === 'heading1' || type === 'heading2' || type === 'heading3') {
+            while (listStack.length > 0) { const c = listStack.pop(); htmlParts.push('</li>', `</${c.type}>`); }
+            const h = `h${type.slice(-1)}`;
+            htmlParts.push(`<${h}>${content}</${h}>`);
+        } else if (type === 'quote') {
+            while (listStack.length > 0) { const c = listStack.pop(); htmlParts.push('</li>', `</${c.type}>`); }
+            htmlParts.push(`<blockquote>${content}</blockquote>`);
         } else {
             while (listStack.length > 0) { const c = listStack.pop(); htmlParts.push('</li>', `</${c.type}>`); }
             htmlParts.push(`<p>${content}</p>`);
@@ -1143,7 +1366,28 @@ editor.addEventListener('copy', (event) => {
 // Paste handler
 editor.addEventListener('paste', (event) => {
     const cd = event.clipboardData; if (!cd) return;
+    recordCheckpoint();
+
+    // Plain-text markdown → convert to blocks
     const html = cd.getData('text/html');
+    if (!html || !(html.includes('<ul') || html.includes('<ol'))) {
+        const text = cd.getData('text/plain');
+        const looksLikeMarkdown = text && text.split('\n').some(l => /^(#{1,3}|[-*]|\d+\.|>)\s/.test(l.trim()));
+        if (looksLikeMarkdown) {
+            event.preventDefault();
+            const blocks = markdownToBlocks(text);
+            const cb = getCurrentBlock();
+            if (cb && blocks.length > 0) {
+                blocks.forEach(b => cb.parentNode.insertBefore(b, cb.nextSibling));
+                updateNumberedBlocks();
+                focusBlock(blocks[blocks.length - 1], true);
+                autoSave();
+            }
+            centerCurrentBlock(true); enforceEphemeralLimit();
+            return;
+        }
+    }
+
     if (html && (html.includes('<ul') || html.includes('<ol'))) {
         event.preventDefault();
         const temp = document.createElement('div'); temp.innerHTML = html;
@@ -1172,26 +1416,27 @@ editor.addEventListener('paste', (event) => {
             updateNumberedBlocks(); focusBlock(blocks[blocks.length - 1], true);
         }
     }
-    centerCurrentBlock(true); enforceEphemeralLimit(); applyEphemeralFading();
+    centerCurrentBlock(true); enforceEphemeralLimit();
 });
 
 // Click / mouse handlers
 editor.addEventListener('click', (event) => {
-    if (state.forwardOnlyMode) { event.preventDefault(); return; }
+    if (state.forwardOnlyMode || state.blindMode) { event.preventDefault(); return; }
     if (editor.querySelectorAll('.block').length === 0) {
         const fb = createBlockElement('text', ''); editor.appendChild(fb); focusBlock(fb);
     }
     updateFocusParagraph(); centerCurrentBlock();
 });
-editor.addEventListener('mousedown', (event) => { if (state.forwardOnlyMode) { event.preventDefault(); return; } });
+editor.addEventListener('mousedown', (event) => { if (state.forwardOnlyMode || state.blindMode) { event.preventDefault(); return; } });
 editor.addEventListener('keyup', () => { updateFocusParagraph(); centerCurrentBlock(true); });
-editor.addEventListener('selectstart', (event) => { if (state.forwardOnlyMode) event.preventDefault(); });
-editor.addEventListener('contextmenu', (event) => { if (state.forwardOnlyMode) event.preventDefault(); });
+editor.addEventListener('selectstart', (event) => { if (state.forwardOnlyMode || state.blindMode) event.preventDefault(); });
+editor.addEventListener('contextmenu', (event) => { if (state.forwardOnlyMode || state.blindMode) event.preventDefault(); });
 
 // Selection change
 document.addEventListener('selectionchange', () => {
+    if (state.fogMode) updateFogBlock();
     if (state.centerMode) {
-        const anyModalOpen = ['command-modal', 'save-modal', 'load-modal', 'delete-modal', 'font-modal', 'heading-modal', 'intro-modal', 'dialog-modal', 'deleted-doc-modal']
+        const anyModalOpen = ['command-modal', 'font-modal', 'heading-modal', 'recent-modal', 'intro-modal', 'dialog-modal', 'find-bar']
             .some(id => !document.getElementById(id).classList.contains('hidden'));
         if (anyModalOpen) return;
 
@@ -1218,99 +1463,41 @@ document.addEventListener('selectionchange', () => {
 // ──────────────────────────────────
 // Modal event wiring (using shared helpers)
 // ──────────────────────────────────
-const saveModal = document.getElementById('save-modal');
-const loadModal = document.getElementById('load-modal');
-const deleteModal = document.getElementById('delete-modal');
 const fontModal = document.getElementById('font-modal');
 const headingModal = document.getElementById('heading-modal');
 const introModal = document.getElementById('intro-modal');
-const deletedDocModal = document.getElementById('deleted-doc-modal');
+const recentModal = document.getElementById('recent-modal');
 
 // Close on click outside
-[saveModal, loadModal, deleteModal, fontModal, headingModal].forEach(m => closeOnClickOutside(m));
+[fontModal, headingModal, recentModal].forEach(m => closeOnClickOutside(m));
+
+// Recent files modal
+document.getElementById('recent-cancel-button').addEventListener('click', () => closeModal(recentModal));
+document.getElementById('recent-search').addEventListener('input', () => {
+    state.selectedRecentIndex = 0;
+    renderRecentList(filteredRecentFiles());
+});
+
+attachModalKeyboardNav(document.getElementById('recent-search'), recentModal, {
+    getItems: () => document.getElementById('recent-list').querySelectorAll('.file-item'),
+    getSelectedIndex: () => state.selectedRecentIndex,
+    setSelectedIndex: (i) => { state.selectedRecentIndex = i; },
+    onEnter: (idx) => { const files = filteredRecentFiles(); if (files[idx]) pickRecentFile(files[idx]); },
+    onFilter: () => renderRecentList(filteredRecentFiles()),
+});
+
+// Find bar
+document.getElementById('find-input').addEventListener('input', () => {
+    updateFindCount(find.search(document.getElementById('find-input').value));
+});
+document.getElementById('find-input').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') { event.preventDefault(); updateFindCount(event.shiftKey ? find.prev() : find.next()); }
+    else if (event.key === 'ArrowDown') { event.preventDefault(); updateFindCount(find.next()); }
+    else if (event.key === 'ArrowUp') { event.preventDefault(); updateFindCount(find.prev()); }
+    else if (event.key === 'Escape') { event.preventDefault(); closeFindBar(true); }
+});
 
 introModal.addEventListener('click', (e) => { if (e.target === introModal) { introModal.classList.add('hidden'); editor.focus(); } });
-deletedDocModal.addEventListener('click', (e) => { if (e.target === deletedDocModal) { deletedDocModal.classList.add('hidden'); editor.focus(); } });
-
-// Save modal
-document.getElementById('save-confirm-button').addEventListener('click', performSave);
-document.getElementById('save-name-input').addEventListener('input', () => {
-    const term = document.getElementById('save-name-input').value.toLowerCase();
-    const docs = getSavedDocuments().filter(d => d.name.toLowerCase().includes(term));
-    state.selectedSaveIndex = 0;
-    renderDocList(document.getElementById('save-list'), docs, 0, (doc) => { document.getElementById('save-name-input').value = doc.name; document.getElementById('save-name-input').focus(); });
-});
-document.getElementById('save-cancel-button').addEventListener('click', () => closeModal(saveModal));
-
-attachModalKeyboardNav(document.getElementById('save-name-input'), saveModal, {
-    getItems: () => document.getElementById('save-list').querySelectorAll('.document-item'),
-    getSelectedIndex: () => state.selectedSaveIndex,
-    setSelectedIndex: (i) => { state.selectedSaveIndex = i; },
-    onEnter: () => {
-        if (document.getElementById('save-name-input').value.trim()) performSave();
-        else {
-            const docs = getSavedDocuments();
-            if (docs[state.selectedSaveIndex]) document.getElementById('save-name-input').value = docs[state.selectedSaveIndex].name;
-        }
-    },
-    onFilter: () => {
-        const term = document.getElementById('save-name-input').value.toLowerCase();
-        const docs = getSavedDocuments().filter(d => d.name.toLowerCase().includes(term));
-        renderDocList(document.getElementById('save-list'), docs, state.selectedSaveIndex, (doc) => { document.getElementById('save-name-input').value = doc.name; });
-    },
-});
-
-// Load modal
-document.getElementById('load-cancel-button').addEventListener('click', () => closeModal(loadModal));
-document.getElementById('load-search').addEventListener('input', () => {
-    const term = document.getElementById('load-search').value.toLowerCase();
-    const docs = getSavedDocuments().filter(d => d.name.toLowerCase().includes(term));
-    state.selectedLoadIndex = 0;
-    renderDocList(document.getElementById('load-list'), docs, 0, (doc) => loadDocumentByName(doc.name));
-});
-
-attachModalKeyboardNav(document.getElementById('load-search'), loadModal, {
-    getItems: () => document.getElementById('load-list').querySelectorAll('.document-item'),
-    getSelectedIndex: () => state.selectedLoadIndex,
-    setSelectedIndex: (i) => { state.selectedLoadIndex = i; },
-    onEnter: (idx) => {
-        const term = document.getElementById('load-search').value.toLowerCase();
-        const docs = getSavedDocuments().filter(d => d.name.toLowerCase().includes(term));
-        if (docs.length === 1) loadDocumentByName(docs[0].name);
-        else if (docs[idx]) loadDocumentByName(docs[idx].name);
-    },
-    onFilter: () => {
-        const term = document.getElementById('load-search').value.toLowerCase();
-        const docs = getSavedDocuments().filter(d => d.name.toLowerCase().includes(term));
-        renderDocList(document.getElementById('load-list'), docs, state.selectedLoadIndex, (doc) => loadDocumentByName(doc.name));
-    },
-});
-
-// Delete modal
-document.getElementById('delete-cancel-button').addEventListener('click', () => closeModal(deleteModal));
-document.getElementById('delete-search').addEventListener('input', () => {
-    const term = document.getElementById('delete-search').value.toLowerCase();
-    const docs = getSavedDocuments().filter(d => d.name.toLowerCase().includes(term));
-    state.selectedDeleteIndex = 0;
-    renderDocList(document.getElementById('delete-list'), docs, 0, (doc) => deleteDocumentByName(doc.name));
-});
-
-attachModalKeyboardNav(document.getElementById('delete-search'), deleteModal, {
-    getItems: () => document.getElementById('delete-list').querySelectorAll('.document-item'),
-    getSelectedIndex: () => state.selectedDeleteIndex,
-    setSelectedIndex: (i) => { state.selectedDeleteIndex = i; },
-    onEnter: (idx) => {
-        const term = document.getElementById('delete-search').value.toLowerCase();
-        const docs = getSavedDocuments().filter(d => d.name.toLowerCase().includes(term));
-        if (docs.length === 1) deleteDocumentByName(docs[0].name);
-        else if (docs[idx]) deleteDocumentByName(docs[idx].name);
-    },
-    onFilter: () => {
-        const term = document.getElementById('delete-search').value.toLowerCase();
-        const docs = getSavedDocuments().filter(d => d.name.toLowerCase().includes(term));
-        renderDocList(document.getElementById('delete-list'), docs, state.selectedDeleteIndex, (doc) => deleteDocumentByName(doc.name));
-    },
-});
 
 // Font modal
 document.getElementById('font-cancel-button').addEventListener('click', closeFontModal);
@@ -1362,13 +1549,9 @@ attachModalKeyboardNav(document.getElementById('heading-search'), headingModal, 
     },
 });
 
-// Deleted doc modal
-document.getElementById('deleted-doc-ok-button').addEventListener('click', () => { deletedDocModal.classList.add('hidden'); editor.focus(); });
-
-// Close intro / deleted doc modal on Escape or /
+// Close intro modal on Escape or /
 document.addEventListener('keydown', (event) => {
     if (!introModal.classList.contains('hidden') && (event.key === 'Escape' || event.key === '/')) { event.preventDefault(); introModal.classList.add('hidden'); editor.focus(); }
-    if (!deletedDocModal.classList.contains('hidden') && (event.key === 'Escape' || event.key === '/')) { event.preventDefault(); deletedDocModal.classList.add('hidden'); editor.focus(); }
 });
 
 // File input fallback
@@ -1380,6 +1563,7 @@ document.getElementById('markdown-file-input').addEventListener('change', (event
         editor.innerHTML = '';
         blocks.forEach(b => editor.appendChild(b));
         updateNumberedBlocks();
+        resetHistory();
         if (blocks.length > 0) focusBlock(blocks[0]);
         document.getElementById('markdown-file-input').value = '';
     };
@@ -1435,18 +1619,17 @@ if (localStorage.getItem('focusMode') === 'true') { state.focusMode = true; docu
 const savedLimit = localStorage.getItem('ephemeralWordLimit');
 if (savedLimit) { const p = parseInt(savedLimit, 10); if (!isNaN(p) && p > 0) state.EPHEMERAL_WORD_LIMIT = p; }
 if (localStorage.getItem('wordCountVisible') === 'true') { state.wordCountVisible = true; document.getElementById('word-count-display').classList.remove('hidden'); }
+const savedSpellcheck = localStorage.getItem('spellcheck');
+editor.spellcheck = savedSpellcheck === null ? true : savedSpellcheck === 'true';
+state.currentStage = localStorage.getItem('writingStage');
 
-// Load content
+// Load autosaved content, then re-attach the synced file (if any)
 loadContent();
-migrateDocumentsWithIds();
-
-// Check URL for document ID
-const docIdFromURL = getDocIdFromURL();
-if (docIdFromURL) {
-    setTimeout(() => loadDocumentById(docIdFromURL), 50);
-} else {
-    setTimeout(() => restoreFileHandle(), 50);
-}
+resetHistory();
+resumeRetypeIfActive();
+// A reload mid-retype must not reconnect the old file — the fresh draft
+// would overwrite it on autosave
+if (!state.retypeActive) setTimeout(() => restoreFileHandle(), 50);
 
 // Show intro on first visit
 if (!localStorage.getItem('hasSeenIntro')) {
@@ -1463,7 +1646,14 @@ setTimeout(() => {
 loadFont();
 loadFontSize();
 loadLineHeight();
+loadColumnWidth();
 loadCustomFonts();
+
+// Native wrapper only: it exposes the Mac's installed font families, which the
+// sandboxed webview can't otherwise see or enumerate. A no-op on the web.
+if (window.__thesisInstalledFonts) {
+    window.__thesisInstalledFonts().then(fonts => { state.installedFonts = fonts; }).catch(() => {});
+}
 
 // Register service worker
 if ('serviceWorker' in navigator) {
@@ -1471,11 +1661,5 @@ if ('serviceWorker' in navigator) {
         .then(() => console.log('Service worker registered'))
         .catch((err) => console.log('Service worker registration failed:', err));
 }
-
-// PWA install prompt
-window.addEventListener('beforeinstallprompt', (event) => {
-    event.preventDefault();
-    state.deferredInstallPrompt = event;
-});
 
 document.addEventListener('fullscreenchange', () => {});
