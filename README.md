@@ -31,6 +31,14 @@ python3 -m http.server
 
 then open `http://localhost:8000`. (A server is needed because the editor uses ES modules; opening `index.html` straight from disk won't work.) In a supporting browser it also installs as a standalone app.
 
+## Mac app
+
+[native/](native/) holds a small Swift wrapper that runs thesis in a frameless window of its own — real save dialogs, the Mac's installed fonts, no browser anywhere. See [native/README.md](native/README.md) for details.
+
+```sh
+cd native && ./build.sh && open build/thesis.app
+```
+
 ---
 
 This is a work in progress. Send me a note if you have ideas.
