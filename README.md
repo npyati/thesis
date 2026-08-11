@@ -17,9 +17,15 @@ thesis works through the keyboard — you shouldn't need the mouse. Type `/` to 
 
 Headings, lists, and quotes, with markdown shortcuts (`-`, `1.`, `>`). Bold, italic, and strikethrough — type `xxxx` to strike the last word while drafting, then delete every struck word at once when you revise. Find, jump to heading, fonts, dark mode, page or canvas view, export to Markdown or Word. All of it lives in the `/` menu. There isn't much here, just what's necessary.
 
+## Comments
+
+Select text and press `⌘⌥M` (or `/` → *Add Comment*) to leave a margin note. Notes anchor to their quoted text and follow it as you edit; reply, edit, resolve, or delete from the card. Turn on *Quick Comment Mode* (`/` menu) and commenting gets even faster: select text and just start typing — the keystrokes become the note, and typing never replaces a selection. They're stored non-destructively at the end of the `.md` file as a single HTML-comment block — the prose is never touched, the file still renders cleanly anywhere, and the same notes open in any tool that speaks the format. Ephemeral documents take no comments; they leave no record.
+
 ## Your writing stays yours
 
 The working draft autosaves to your browser's local storage, and you can open or create a real `.md` file on disk — thesis keeps it in sync as you write. There is no server, no account, and no analytics; nothing leaves your machine.
+
+The sync works in both directions: if another app changes the connected file — an agent replying to comments, another editor — thesis picks the changes up when its window regains focus (or via `/` → *Reload File*), and leaving the window writes pending edits out immediately. If both sides changed at once, thesis asks which version wins rather than silently overwriting either.
 
 ## Running it
 

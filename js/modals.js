@@ -133,7 +133,9 @@ export function showAlert(message) {
         };
 
         dialogConfirmButton.addEventListener('click', handleConfirm);
-        document.addEventListener('keydown', handleKeydown);
+        // Register a tick late: the keystroke that OPENED this dialog (Enter in
+        // the command menu) is still bubbling and would dismiss it instantly
+        setTimeout(() => document.addEventListener('keydown', handleKeydown), 0);
         setTimeout(() => dialogConfirmButton.focus(), 0);
     });
 }
@@ -185,7 +187,9 @@ export function showConfirm(message) {
 
         dialogConfirmButton.addEventListener('click', handleConfirm);
         dialogCancelButton.addEventListener('click', handleCancel);
-        document.addEventListener('keydown', handleKeydown);
+        // Register a tick late: the keystroke that OPENED this dialog (Enter in
+        // the command menu) is still bubbling and would auto-confirm it
+        setTimeout(() => document.addEventListener('keydown', handleKeydown), 0);
         setTimeout(() => dialogConfirmButton.focus(), 0);
     });
 }

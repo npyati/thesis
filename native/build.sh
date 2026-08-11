@@ -19,6 +19,10 @@ cp -R "$WEB_SRC/js" "$CONTENTS/Resources/web/js"
 # ── native shim ──
 cp shim/native-shim.js "$CONTENTS/Resources/"
 
+# ── margin companion (spawned by the shell for invited files) ──
+mkdir -p "$CONTENTS/Resources/margin"
+cp "$WEB_SRC/margin/margin.js" "$WEB_SRC/margin/PROTOCOL.md" "$WEB_SRC/margin/README.md" "$CONTENTS/Resources/margin/"
+
 # ── app icon: AppIcon-1024.png (margined, Dock-style) if present, else the PWA icon ──
 ICON_SRC="AppIcon-1024.png"
 [ -f "$ICON_SRC" ] || ICON_SRC="$WEB_SRC/android-chrome-512x512.png"
@@ -53,6 +57,36 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
     <key>NSHighResolutionCapable</key><true/>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key><string>Markdown Document</string>
+            <key>CFBundleTypeRole</key><string>Editor</string>
+            <key>LSHandlerRank</key><string>Default</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>net.daringfireball.markdown</string>
+                <string>public.plain-text</string>
+            </array>
+        </dict>
+    </array>
+    <!-- macOS has no built-in markdown UTI; import the conventional one -->
+    <key>UTImportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key><string>net.daringfireball.markdown</string>
+            <key>UTTypeDescription</key><string>Markdown Document</string>
+            <key>UTTypeConformsTo</key>
+            <array><string>public.plain-text</string></array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array><string>md</string><string>markdown</string></array>
+                <key>public.mime-type</key>
+                <array><string>text/markdown</string></array>
+            </dict>
+        </dict>
+    </array>
 </dict>
 </plist>
 PLIST
@@ -64,4 +98,8 @@ swiftc -O \
     -o "$CONTENTS/MacOS/thesis"
 
 codesign --force --sign - "$APP"
+
+# Tell LaunchServices about the (new) document-type claims right away
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" || true
+
 echo "Built $APP"

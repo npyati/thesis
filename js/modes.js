@@ -405,6 +405,13 @@ export function togglePageStyle() {
 }
 
 export function toggleFullscreen() {
+    // Native wrapper: element fullscreen leaves WKWebView with a stale layout
+    // viewport on exit (window resizes stop reflowing) — the shim routes this
+    // to real macOS window fullscreen instead
+    if (window.__thesisToggleFullscreen) {
+        window.__thesisToggleFullscreen();
+        return;
+    }
     if (!document.fullscreenElement) {
         document.documentElement.requestFullscreen().catch(err => {
             console.error(`Error attempting to enable fullscreen: ${err.message}`);

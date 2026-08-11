@@ -12,7 +12,21 @@
 </head>
 <body>
     <div id="titlebar" aria-hidden="true"></div>
-    <div id="editor" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Document editor" placeholder="Start writing..."></div>
+    <div id="editor" contenteditable="true" autocorrect="off" writingsuggestions="false" role="textbox" aria-multiline="true" aria-label="Document editor" placeholder="Start writing..."></div>
+    <aside id="comments-panel" class="hidden" role="complementary" aria-label="Comments">
+        <div id="comments-head">
+            <span>Comments</span>
+            <div id="comments-head-actions">
+                <button id="comments-prev" title="Previous comment (⌘⌥,)" aria-label="Previous comment">‹</button>
+                <button id="comments-next" title="Next comment (⌘⌥.)" aria-label="Next comment">›</button>
+                <button id="comments-resolved-toggle" title="Show or hide resolved comments">resolved</button>
+            </div>
+        </div>
+        <div id="comments-scroll">
+            <div id="comments-cards"></div>
+            <div id="comments-empty" class="hidden">Select text and press ⌘⌥M to leave a note — it saves into the .md file.</div>
+        </div>
+    </aside>
     <div id="command-modal" class="hidden" role="dialog" aria-label="Command palette">
         <div id="mode-status" role="status" aria-live="polite"></div>
         <input type="text" id="command-search" placeholder="Search commands..." autocomplete="off" aria-label="Search commands" role="combobox" aria-expanded="true" aria-controls="command-list">
@@ -38,6 +52,16 @@
             </div>
         </div>
     </div>
+    <div id="model-modal" class="hidden modal-overlay" role="dialog" aria-label="Select Claude model">
+        <div class="modal-content">
+            <h3>Claude Model</h3>
+            <input type="text" id="model-search" placeholder="Search models, or type an exact model id…" autocomplete="off">
+            <div id="model-list" class="font-list"></div>
+            <div class="modal-buttons">
+                <button id="model-cancel-button" class="modal-button">Cancel</button>
+            </div>
+        </div>
+    </div>
     <div id="heading-modal" class="hidden modal-overlay" role="dialog" aria-label="Jump to heading">
         <div class="modal-content">
             <h3>Jump to Heading</h3>
@@ -51,6 +75,16 @@
     <div id="intro-modal" class="hidden modal-overlay" role="dialog" aria-label="Introduction">
         <div class="modal-content intro-content">
             <div id="intro-text"></div>
+        </div>
+    </div>
+    <div id="guide-modal" class="hidden modal-overlay" role="dialog" aria-label="Shortcuts and guide">
+        <div class="modal-content guide-content" tabindex="-1">
+            <div class="guide-header">
+                <h3>Shortcuts &amp; guide</h3>
+                <button id="guide-expand-toggle" class="guide-expand-toggle" type="button">Expand all</button>
+            </div>
+            <div id="guide-body" class="guide-body"></div>
+            <p class="guide-foot">Every row is also a <kbd class="guide-key">/</kbd> command. Press <kbd class="guide-key">esc</kbd> to close.</p>
         </div>
     </div>
     <div id="dialog-modal" class="hidden modal-overlay" role="alertdialog" aria-label="Dialog">
@@ -84,6 +118,8 @@
         <span id="word-count">0 words</span>
         <span class="separator">•</span>
         <span id="char-count">0 characters</span>
+        <span class="separator hidden" id="comment-count-sep">•</span>
+        <span id="comment-count" class="hidden"></span>
     </div>
     <input type="file" id="markdown-file-input" accept=".md,.markdown" style="display: none;">
     <script type="module" src="js/app.js"></script>

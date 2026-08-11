@@ -4,6 +4,7 @@
 // state restored from snapshots instead.
 
 import { getEditor } from './blocks.js';
+import { unwrapMarks } from './comments.js';
 
 const MAX_STACK = 100;
 const TYPING_DEBOUNCE_MS = 500;
@@ -17,6 +18,9 @@ function serialize() {
     const editor = getEditor();
     const clone = editor.cloneNode(true);
     clone.querySelectorAll('[data-spacer]').forEach(s => s.remove());
+    // Comment highlights are derived state — keep them out of snapshots so
+    // undo/redo never resurrects stale marks (they re-anchor after restore)
+    unwrapMarks(clone);
     return { html: clone.innerHTML, cursor: serializeCursor() };
 }
 

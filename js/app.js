@@ -2,7 +2,7 @@
 
 import state from './state.js';
 import { debounce, readJSON, restoreSelection } from './utils.js';
-import { getEditor, getCurrentBlock, getSelectedBlocks, createBlockElement, updateNumberedBlocks, focusBlock } from './blocks.js';
+import { getEditor, getCurrentBlock, getSelectedBlocks, createBlockElement, updateNumberedBlocks, focusBlock, revealCaret, normalizeBlocks } from './blocks.js';
 import { openModal, closeModal, closeOnClickOutside, attachModalKeyboardNav, showAlert, showConfirm } from './modals.js';
 import { applyFormatting, strikethroughLastWord, deleteAllStrikethrough } from './formatting.js';
 import {
@@ -18,11 +18,20 @@ import {
     loadContent, autoSave, saveToNewFile,
     importFromMarkdown, exportAsMarkdown, exportAsWord,
     copyAll, copyAsMarkdown, clearAll, clearStorage, quickSave,
-    markdownToBlocks, restoreFileHandle, openRecentFile, setSaveStatus,
+    markdownToBlocks, restoreFileHandle, openRecentFile, setSaveStatus, openExternalFile,
+    checkExternalChanges, reloadFromFile, flushAutoSave, syncMarginProcess,
 } from './io.js';
 import { getRecentFiles } from './db.js';
+import { blocksFromPastedHTML } from './sanitize.js';
 import { recordCheckpoint, scheduleCheckpoint, undo as historyUndo, redo as historyRedo, resetHistory } from './history.js';
 import * as find from './find.js';
+import {
+    initComments, addCommentOnSelection, askClaudeOnSelection, addWholeDocumentComment,
+    toggleCommentsPanel,
+    renderCommentUI, setComments, setMargin, splitComments, openCommentCount,
+    quickCommentFromTyping, toggleQuickCommentMode, cycleComment,
+    positionCards,
+} from './comments.js';
 
 const editor = getEditor();
 
@@ -66,22 +75,24 @@ function addCustomFont(fontName) {
     if (isFontAvailable(fontName)) { state.customFonts.unshift(fontName); saveCustomFonts(); return true; }
     return false;
 }
-function applyFont(font) { editor.style.fontFamily = font; localStorage.setItem('editorFont', font); closeFontModal(); }
+// Every appearance change reflows the text under the comment highlights —
+// the cards must follow (positionCards is rAF'd, so this is cheap)
+function applyFont(font) { editor.style.fontFamily = font; localStorage.setItem('editorFont', font); closeFontModal(); positionCards(); }
 function loadFont() { const f = localStorage.getItem('editorFont'); if (f) editor.style.fontFamily = f; }
 
 function increaseFontSize() { state.currentFontSize = Math.min(state.currentFontSize + 2, 40); applyFontSize(); }
 function decreaseFontSize() { state.currentFontSize = Math.max(state.currentFontSize - 2, 10); applyFontSize(); }
-function applyFontSize() { editor.style.fontSize = state.currentFontSize + 'px'; localStorage.setItem('editorFontSize', state.currentFontSize); }
+function applyFontSize() { editor.style.fontSize = state.currentFontSize + 'px'; localStorage.setItem('editorFontSize', state.currentFontSize); positionCards(); }
 function loadFontSize() { const s = localStorage.getItem('editorFontSize'); if (s) { state.currentFontSize = parseInt(s); editor.style.fontSize = state.currentFontSize + 'px'; } }
 
 function increaseLineHeight() { state.currentLineHeight = Math.min(state.currentLineHeight + 0.1, 2.5); applyLineHeight(); }
 function decreaseLineHeight() { state.currentLineHeight = Math.max(state.currentLineHeight - 0.1, 1.0); applyLineHeight(); }
-function applyLineHeight() { editor.style.lineHeight = state.currentLineHeight; localStorage.setItem('editorLineHeight', state.currentLineHeight); }
+function applyLineHeight() { editor.style.lineHeight = state.currentLineHeight; localStorage.setItem('editorLineHeight', state.currentLineHeight); positionCards(); }
 function loadLineHeight() { const l = localStorage.getItem('editorLineHeight'); if (l) { state.currentLineHeight = parseFloat(l); editor.style.lineHeight = state.currentLineHeight; } }
 
 function increaseColumnWidth() { state.currentColumnWidth = Math.min(state.currentColumnWidth + 50, 1200); applyColumnWidth(); }
 function decreaseColumnWidth() { state.currentColumnWidth = Math.max(state.currentColumnWidth - 50, 400); applyColumnWidth(); }
-function applyColumnWidth() { document.documentElement.style.setProperty('--column-width', state.currentColumnWidth + 'px'); localStorage.setItem('editorColumnWidth', state.currentColumnWidth); }
+function applyColumnWidth() { document.documentElement.style.setProperty('--column-width', state.currentColumnWidth + 'px'); localStorage.setItem('editorColumnWidth', state.currentColumnWidth); positionCards(); }
 function loadColumnWidth() { const w = localStorage.getItem('editorColumnWidth'); if (w) { state.currentColumnWidth = parseInt(w); document.documentElement.style.setProperty('--column-width', state.currentColumnWidth + 'px'); } }
 
 // ──────────────────────────────────
@@ -105,6 +116,16 @@ function updateWordCount() {
         wordCountSpan.textContent = `${words} ${words === 1 ? 'word' : 'words'}`;
     }
     charCountSpan.textContent = `${chars} ${chars === 1 ? 'character' : 'characters'}`;
+
+    // Optional open-comment count in the same pill
+    const cSep = document.getElementById('comment-count-sep');
+    const cSpan = document.getElementById('comment-count');
+    if (cSep && cSpan) {
+        const open = state.commentCountInPill ? openCommentCount() : 0;
+        cSep.classList.toggle('hidden', open === 0);
+        cSpan.classList.toggle('hidden', open === 0);
+        if (open > 0) cSpan.textContent = `${open} open ${open === 1 ? 'comment' : 'comments'}`;
+    }
 }
 
 const debouncedWordCount = debounce(updateWordCount, 150);
@@ -115,6 +136,12 @@ function showWordCountToggle() {
     const display = document.getElementById('word-count-display');
     if (state.wordCountVisible) { display.classList.remove('hidden'); updateWordCount(); }
     else { display.classList.add('hidden'); }
+}
+
+function toggleCommentCountInPill() {
+    state.commentCountInPill = !state.commentCountInPill;
+    localStorage.setItem('commentCountInPill', state.commentCountInPill);
+    updateWordCount();
 }
 
 // ──────────────────────────────────
@@ -159,6 +186,67 @@ async function openHeadingModal() {
     search.value = '';
     renderHeadings(headings);
     openModal(modal, search);
+}
+
+// ──────────────────────────────────
+// Claude model modal
+// ──────────────────────────────────
+// Which model reads the margin. The empty id is the default — margin.js then
+// omits --model and the CLI picks, which is what most writers want. The rest
+// are passed through verbatim as `claude --model <id>`; the search field also
+// accepts anything you type, so a model released after this list still works.
+const MODELS = [
+    { id: '',                  name: 'Default',           note: 'whatever your Claude Code login uses' },
+    { id: 'claude-opus-5',     name: 'Claude Opus 5',     note: 'deep reading — the strongest reader' },
+    { id: 'claude-sonnet-5',   name: 'Claude Sonnet 5',   note: 'near-Opus quality, faster and cheaper' },
+    { id: 'claude-haiku-4-5',  name: 'Claude Haiku 4.5',  note: 'fastest; best for typo-level notes' },
+    { id: 'claude-fable-5',    name: 'Claude Fable 5',    note: 'most capable, slowest, priciest' },
+    { id: 'claude-opus-4-8',   name: 'Claude Opus 4.8',   note: 'previous Opus' },
+    { id: 'claude-opus-4-7',   name: 'Claude Opus 4.7',   note: 'older Opus' },
+    { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', note: 'previous Sonnet' },
+];
+
+const currentModel = () => localStorage.getItem('marginModel') || '';
+
+function filteredModels() {
+    const term = document.getElementById('model-search').value.trim().toLowerCase();
+    if (!term) return MODELS;
+    const hits = MODELS.filter(m => `${m.name} ${m.id} ${m.note}`.toLowerCase().includes(term));
+    // A model id we don't know about is still a valid thing to ask for
+    if (hits.length === 0) return [{ id: term, name: term, note: 'use this model id as typed' }];
+    return hits;
+}
+
+function renderModels(models) {
+    const list = document.getElementById('model-list');
+    list.innerHTML = '';
+    const current = currentModel();
+    models.forEach((m, i) => {
+        const item = document.createElement('div');
+        item.className = `font-item ${i === state.selectedModelIndex ? 'selected' : ''} ${m.id === current ? 'current' : ''}`;
+        item.textContent = m.note ? `${m.name} — ${m.note}` : m.name;
+        item.setAttribute('role', 'option');
+        item.addEventListener('click', () => applyModel(m.id));
+        list.appendChild(item);
+    });
+}
+
+// Changing the model restarts the companion, so the next pass is read by the
+// model you just picked rather than the one that was already attached.
+function applyModel(id) {
+    if (id) localStorage.setItem('marginModel', id);
+    else localStorage.removeItem('marginModel');
+    closeModal(document.getElementById('model-modal'));
+    if (window.__thesisStopMargin) window.__thesisStopMargin();
+    syncMarginProcess();
+}
+
+function openModelModal() {
+    state.selectedModelIndex = 0;
+    const search = document.getElementById('model-search');
+    search.value = '';
+    renderModels(MODELS);
+    openModal(document.getElementById('model-modal'), search);
 }
 
 // ──────────────────────────────────
@@ -277,8 +365,10 @@ function closeFindBar(commit) {
 function afterHistoryRestore() {
     if (state.centerMode) addCenterModeSpacers();
     updateNumberedBlocks();
+    renderCommentUI();
     autoSave();
     updateFocusParagraph();
+    revealCaret();
     if (state.wordCountVisible) debouncedWordCount();
 }
 
@@ -374,6 +464,138 @@ async function changeEphemeralWordLimit() {
 }
 
 // ──────────────────────────────────
+// Claude in the margin — per-file invitation + brief (thesis:margin block)
+// ──────────────────────────────────
+// Consent is file-level and explicit: the marker lives in the file itself, so
+// it travels with the document and survives moves between folders. The margin
+// companion reads nothing unmarked.
+async function toggleClaudeInvitation() {
+    if (state.currentDocumentIsEphemeral) {
+        await showAlert('Ephemeral documents leave no record — there is nothing for Claude to read.');
+        return;
+    }
+    if (!state.currentFileHandle) {
+        await showAlert('Connect this document to a file first — the invitation lives in the file.');
+        return;
+    }
+    if (state.marginRaw) {
+        await showAlert('This file has a damaged margin block that thesis is preserving untouched — repair it before changing the invitation.');
+        return;
+    }
+    const invited = !!(state.margin && state.margin.invited);
+    if (!invited) {
+        const ok = await showConfirm(
+            'Invite Claude to read this file? While the invitation stands, ' +
+            'this file and its comments are sent to Anthropic under your account. ' +
+            'Revoke any time with this same command.'
+        );
+        if (!ok) return;
+        state.margin = { ...(state.margin || {}), invited: true };
+    } else {
+        const ok = await showConfirm('Revoke Claude’s invitation to this file?');
+        if (!ok) return;
+        state.margin = { ...(state.margin || {}), invited: false };
+    }
+    // Write the consent to disk now, then let the shell start (or stop) the
+    // reader — the invitation should be in the file before anyone reads it
+    autoSave();
+    flushAutoSave();
+    syncMarginProcess();
+}
+
+// A whole-document summon: posts an @claude document note asking for a full
+// read. The margin answers in-thread with its general read and may add
+// anchored notes alongside. Edit the posted note to sharpen the ask.
+async function askClaudeFullRead() {
+    if (state.currentDocumentIsEphemeral) {
+        await showAlert('Ephemeral documents leave no record — there is nothing for Claude to read.');
+        return;
+    }
+    if (!state.currentFileHandle) {
+        await showAlert('Connect this document to a file first — the conversation lives in the file.');
+        return;
+    }
+    if (state.commentsRaw) {
+        await showAlert('This file has a damaged comment block that thesis is preserving untouched — repair it before adding new comments.');
+        return;
+    }
+    addWholeDocumentComment('@claude do a full read — general thoughts as well as specific notes.');
+    if (!(state.margin && state.margin.invited)) {
+        await showAlert('Posted — but Claude isn’t invited to this file yet. Run Invite Claude and the margin will answer.');
+    }
+}
+
+// The brief: how you want to be read, handed to every pass over this file
+// ("challenge my logic, leave my style alone"). File-level, like consent.
+async function editClaudeBrief() {
+    if (state.currentDocumentIsEphemeral || !state.currentFileHandle) {
+        await showAlert('Connect this document to a file first — the brief lives in the file.');
+        return;
+    }
+    if (state.marginRaw) {
+        await showAlert('This file has a damaged margin block that thesis is preserving untouched — repair it before editing the brief.');
+        return;
+    }
+    const commandModal = document.getElementById('command-modal');
+    commandModal.classList.add('hidden');
+
+    return new Promise((resolve) => {
+        const dialogModal = document.getElementById('dialog-modal');
+        const dialogMessage = document.getElementById('dialog-message');
+        const dialogConfirmButton = document.getElementById('dialog-confirm-button');
+        const dialogCancelButton = document.getElementById('dialog-cancel-button');
+
+        const ta = document.createElement('textarea');
+        ta.rows = 4;
+        ta.value = (state.margin && state.margin.brief) || '';
+        ta.placeholder = 'How should Claude read this file? e.g. "Challenge my logic, leave my style alone."';
+        ta.setAttribute('autocomplete', 'off');
+        ta.style.cssText = 'width:100%;margin-top:15px;padding:14px 16px;font-size:14px;font-family:inherit;border:1px solid #ddd;border-radius:6px;outline:none;box-sizing:border-box;background:#fff;resize:vertical;';
+
+        dialogMessage.innerHTML = '';
+        const title = document.createElement('div');
+        title.textContent = 'Claude’s brief for this file';
+        dialogMessage.appendChild(title);
+        dialogMessage.appendChild(ta);
+        dialogConfirmButton.textContent = 'Save';
+        dialogCancelButton.style.display = 'inline-block';
+
+        const cleanup = () => {
+            dialogConfirmButton.removeEventListener('click', handleConfirm);
+            dialogCancelButton.removeEventListener('click', handleCancel);
+            ta.removeEventListener('keydown', handleKeydown);
+            dialogModal.classList.add('hidden');
+            editor.focus();
+        };
+        const handleConfirm = () => {
+            const brief = ta.value.trim();
+            const margin = { ...(state.margin || { invited: false }) };
+            if (brief) margin.brief = brief;
+            else delete margin.brief;
+            state.margin = margin;
+            autoSave();
+            cleanup();
+            resolve();
+        };
+        const handleCancel = () => { cleanup(); resolve(); };
+        const handleKeydown = (event) => {
+            event.stopPropagation();
+            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); handleConfirm(); }
+            else if (event.key === 'Escape') { event.preventDefault(); handleCancel(); }
+        };
+
+        dialogConfirmButton.addEventListener('click', handleConfirm);
+        dialogCancelButton.addEventListener('click', handleCancel);
+        ta.addEventListener('keydown', handleKeydown);
+
+        setTimeout(() => {
+            dialogModal.classList.remove('hidden');
+            setTimeout(() => { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }, 50);
+        }, 100);
+    });
+}
+
+// ──────────────────────────────────
 // Block operations (heading/list/quote apply)
 // ──────────────────────────────────
 function applyHeading(level) {
@@ -455,10 +677,37 @@ function deleteBlocks() {
     autoSave();
 }
 
+// Move the current block (or selected blocks) up or down. direction: -1 up, +1 down.
+function moveBlocks(direction) {
+    recordCheckpoint();
+    let blocks;
+    if (state.multiBlockSelection.length > 0) blocks = state.multiBlockSelection;
+    else { const sel = getSelectedBlocks(); blocks = sel.length > 1 ? sel : [getCurrentBlock()]; }
+    if (!blocks[0]) return;
+
+    if (direction < 0) {
+        if (!blocks[0].previousElementSibling) return;
+        const target = blocks[0].previousElementSibling;
+        for (let i = 0; i < blocks.length; i++) editor.insertBefore(blocks[i], target);
+    } else {
+        const last = blocks[blocks.length - 1];
+        if (!last.nextElementSibling) return;
+        const nextBlock = last.nextElementSibling;
+        const targetPos = nextBlock.nextElementSibling;
+        for (let i = blocks.length - 1; i >= 0; i--) {
+            if (targetPos) editor.insertBefore(blocks[i], targetPos);
+            else editor.appendChild(blocks[i]);
+        }
+    }
+    updateNumberedBlocks(); autoSave();
+    if (blocks.length === 1) focusBlock(blocks[0]);
+    positionCards();
+}
+
 // ──────────────────────────────────
 // Intro
 // ──────────────────────────────────
-const introHTML = `<p><strong>thesis</strong> is a minimalist text editor, designed for focus and creativity.</p><p>It works through the keyboard — you shouldn't need the mouse. Type <strong>/</strong> to open the command menu, then search or use the arrow keys and press <strong>[enter]</strong>. Type <strong>/</strong> again to close it (press <strong>[space]</strong> at the empty prompt to keep a literal /).</p><p>Your writing saves automatically as you type — you never need to reach for Save. It's kept in this browser, and you can also <em>Open File</em> or <em>Save to File As…</em> to sync a real <strong>.md</strong> file on your computer. Nothing is ever sent online.</p><p>There are a few different ways to write, all in the / menu:</p><ul><li><strong>Stages</strong> — Draft, Revise, and Polish set the editor up for each phase of writing.</li><li><strong>Forward-only</strong> — type like a typewriter, with no going back.</li><li><strong>Blind</strong> — write without seeing anything; a running word count keeps you company.</li><li><strong>Ephemeral</strong> — the oldest words fade away as new ones arrive, leaving no record.</li><li><strong>Retype</strong> — redraft by retyping your old draft one paragraph at a time.</li><li><strong>Focus</strong> — fade or blur everything but the line you're on, or keep it centered.</li></ul><p>There's more to find — fonts, dark mode, find, export to Markdown or Word — but that's enough to start. There isn't much here, just what's necessary.</p><p><strong>This is a work in progress.</strong> Send me a note if you have ideas.</p>`;
+const introHTML = `<p><strong>thesis</strong> is a minimalist text editor, designed for focus and creativity.</p><p>It works through the keyboard — you shouldn't need the mouse. Type <strong>/</strong> to open the command menu, then search or use the arrow keys and press <strong>[enter]</strong>. Type <strong>/</strong> again to close it (press <strong>[space]</strong> at the empty prompt to keep a literal /).</p><p>Your writing saves automatically as you type — you never need to reach for Save. It's kept in this browser, and you can also <em>Open File</em> or <em>Save to File As…</em> to sync a real <strong>.md</strong> file on your computer. Nothing is ever sent online.</p><p>There are a few different ways to write, all in the / menu:</p><ul><li><strong>Stages</strong> — Draft, Revise, and Polish set the editor up for each phase of writing.</li><li><strong>Forward-only</strong> — type like a typewriter, with no going back.</li><li><strong>Blind</strong> — write without seeing anything; a running word count keeps you company.</li><li><strong>Ephemeral</strong> — the oldest words fade away as new ones arrive, leaving no record.</li><li><strong>Retype</strong> — redraft by retyping your old draft one paragraph at a time.</li><li><strong>Focus</strong> — fade or blur everything but the line you're on, or keep it centered.</li></ul><p>There's more to find — fonts, dark mode, find, margin comments (select text, <strong>⌘⌥M</strong>), export to Markdown or Word — but that's enough to start. There isn't much here, just what's necessary.</p><p>For every shortcut and a note on each way of writing, open <a href="#" id="intro-guide-link"><strong>Shortcuts &amp; Guide</strong></a> — or press <strong>/</strong> and search for it.</p><p><strong>This is a work in progress.</strong> Send me a note if you have ideas.</p>`;
 
 function showIntro() {
     document.getElementById('intro-text').innerHTML = introHTML;
@@ -466,75 +715,215 @@ function showIntro() {
 }
 
 // ──────────────────────────────────
+// Shortcuts & guide
+// ──────────────────────────────────
+// Collapsed, each entry is a cheat-sheet row (keycaps + name). Entries with a
+// `detail` get a chevron and expand in place to explain the feature.
+const guide = [
+    { section: 'Command menu', entries: [
+        { keys: ['/'], name: 'Open the command menu', detail: 'Type / anywhere to open the menu, then search by name or use ↑ ↓ and press Enter. Type / again to close it — or press Space at the empty prompt to type a literal slash. Everything thesis can do lives here.' },
+    ] },
+    { section: 'Moving & editing', entries: [
+        { keys: ['⌥', '↑'], name: 'Move line up', detail: 'Moves the current paragraph — or every paragraph in your selection — above its neighbour. Numbered lists renumber themselves.' },
+        { keys: ['⌥', '↓'], name: 'Move line down', detail: 'Moves the current paragraph (or selection) below the next one.' },
+        { keys: ['⌘', 'Z'], name: 'Undo' },
+        { keys: ['⌘', '⇧', 'Z'], name: 'Redo', detail: 'Undo and redo step through your edits. Both are disabled in Forward-only mode, where there is no going back.' },
+        { keys: ['⌘', 'D'], name: 'Delete block', detail: 'Removes the current block, or every block you have selected.' },
+        { keys: ['⌘', 'B'], name: 'Bold' },
+        { keys: ['⌘', 'I'], name: 'Italic' },
+        { keys: ['⌘', 'S'], name: 'Save to file', detail: 'Writes to the connected .md file, or asks you to choose one. Your work also autosaves in this browser as you type, so you rarely need to reach for Save.' },
+    ] },
+    { section: 'Ways to write', entries: [
+        { name: 'Draft · Revise · Polish', detail: 'Three presets for the arc of a piece. Draft is forward-only with focus on and spellcheck off — just get words out. Revise unlocks editing and shows the whole document. Polish turns spellcheck on for the final pass.' },
+        { name: 'Forward-only', detail: 'Type like a typewriter: backspace, deletion, and cursor movement are locked, so you can only move ahead.' },
+        { name: 'Blind', detail: 'Hides everything you write; a running word count keeps you company. Good for silencing the inner editor.' },
+        { name: 'Ephemeral', detail: 'The oldest words dissolve as new ones arrive, leaving no record behind — pure flow.' },
+        { name: 'Retype', detail: 'Redraft by retyping: your old draft shows a paragraph at a time while you type it fresh. While retyping, ⌘↓ / ⌘↑ move between paragraphs and ⌘. ends the session.' },
+    ] },
+    { section: 'Focus & view', entries: [
+        { name: 'Fade · Fog · Center focus', detail: 'Fade dims the paragraphs around the one you are on. Fog blurs everything but the active line. Center keeps the active line in the middle of the screen.' },
+        { keys: ['⌘', '+'], name: 'Larger text' },
+        { keys: ['⌘', '−'], name: 'Smaller text' },
+        { keys: ['⌘', ']'], name: 'More line spacing' },
+        { keys: ['⌘', '['], name: 'Less line spacing' },
+        { keys: ['⌘', '⇧', ']'], name: 'Wider column' },
+        { keys: ['⌘', '⇧', '['], name: 'Narrower column' },
+        { keys: ['F11'], name: 'Fullscreen' },
+    ] },
+    { section: 'Finding your way', entries: [
+        { keys: ['⌘', 'F'], name: 'Find in document' },
+        { name: 'Jump to heading', detail: 'Open the command menu and choose Jump to Heading to move straight to any heading in the document.' },
+    ] },
+    { section: 'Comments & Claude', entries: [
+        { keys: ['⌘', '⌥', 'M'], name: 'Add comment', detail: 'Select text and add a margin note. Comments are saved right inside the .md file, so they travel with it.' },
+        { keys: ['⌘', '⌥', '.'], name: 'Next comment' },
+        { keys: ['⌘', '⌥', ','], name: 'Previous comment' },
+        { name: 'Ask Claude', detail: 'Address a comment to @claude and the margin answers when it reads. Full Read asks for a read of the whole piece. Claude only ever sees a file you have explicitly invited — consent lives in the file itself, and nothing is sent online otherwise.' },
+    ] },
+];
+
+function renderGuide() {
+    const body = document.getElementById('guide-body');
+    body.innerHTML = '';
+    for (const group of guide) {
+        const section = document.createElement('div');
+        section.className = 'guide-section';
+        const title = document.createElement('div');
+        title.className = 'guide-section-title';
+        title.textContent = group.section;
+        section.appendChild(title);
+
+        for (const entry of group.entries) {
+            const row = document.createElement('div');
+            row.className = 'guide-row' + (entry.detail ? ' has-detail' : '');
+
+            const head = document.createElement('div');
+            head.className = 'guide-row-head';
+            if (entry.detail) { head.setAttribute('role', 'button'); head.tabIndex = 0; }
+
+            const keys = document.createElement('span');
+            keys.className = 'guide-keys';
+            (entry.keys || []).forEach((k, i) => {
+                if (i > 0) {
+                    const plus = document.createElement('span');
+                    plus.className = 'guide-plus';
+                    plus.textContent = '+';
+                    keys.appendChild(plus);
+                }
+                const kbd = document.createElement('kbd');
+                kbd.className = 'guide-key';
+                kbd.textContent = k;
+                keys.appendChild(kbd);
+            });
+
+            const name = document.createElement('span');
+            name.className = 'guide-name';
+            name.textContent = entry.name;
+
+            head.appendChild(keys);
+            head.appendChild(name);
+
+            if (entry.detail) {
+                const chev = document.createElement('span');
+                chev.className = 'guide-chevron';
+                chev.textContent = '›';
+                head.appendChild(chev);
+            }
+            row.appendChild(head);
+
+            if (entry.detail) {
+                const detail = document.createElement('div');
+                detail.className = 'guide-detail';
+                const inner = document.createElement('div');
+                inner.className = 'guide-detail-inner';
+                inner.textContent = entry.detail;
+                detail.appendChild(inner);
+                row.appendChild(detail);
+            }
+            section.appendChild(row);
+        }
+        body.appendChild(section);
+    }
+}
+
+function showGuide() {
+    renderGuide();
+    document.getElementById('guide-expand-toggle').textContent = 'Expand all';
+    const modal = document.getElementById('guide-modal');
+    // openModal defers focus (past executeCommand's editor.focus()) and traps Tab
+    // inside the modal, so keystrokes don't leak into the editor behind it.
+    openModal(modal, modal.querySelector('.guide-content'));
+}
+
+// ──────────────────────────────────
 // Commands
 // ──────────────────────────────────
 // Category order controls the grouping shown in the command menu
-const CATEGORY_ORDER = ['Document', 'Write', 'Format', 'Navigate', 'View', 'Share', 'App'];
+const CATEGORY_ORDER = ['Document', 'Write', 'Format', 'Comments', 'Navigate', 'View', 'Share', 'App'];
 
 const commands = [
     // Document
-    { name: 'Save', description: 'Save to the current file (or choose one)', action: quickSave, category: 'Document' },
-    { name: 'Open File', description: 'Open and auto-sync with a .md file on disk', action: importFromMarkdown, category: 'Document' },
-    { name: 'Open Recent', description: 'Reopen a recently used file', action: openRecentModal, category: 'Document' },
-    { name: 'Save to File As...', description: 'Save and auto-sync to a new .md file on disk', action: saveToNewFile, category: 'Document' },
-    { name: 'New Document', description: 'Start a new document', action: clearAll, category: 'Document' },
-    { name: 'New Ephemeral Document', description: 'Write in pure flow - oldest words dissolve as new thoughts emerge', action: () => { createNewEphemeralDocument(autoSave); setSaveStatus('hidden'); }, category: 'Document' },
+    // Icons are flat text glyphs; '︎' pins emoji-capable codepoints to
+    // monochrome text presentation
+    { icon: '↧', name: 'Save', description: 'Save to the current file (or choose one)', action: quickSave, category: 'Document' },
+    { icon: '↥', name: 'Open File', description: 'Open and auto-sync with a .md file on disk', action: importFromMarkdown, category: 'Document' },
+    { icon: '◷', name: 'Open Recent', description: 'Reopen a recently used file', action: openRecentModal, category: 'Document' },
+    { icon: '↻', name: 'Reload File', description: 'Re-read the connected .md file from disk to pick up outside changes', action: reloadFromFile, category: 'Document' },
+    { icon: '⇲', name: 'Save to File As...', description: 'Save and auto-sync to a new .md file on disk', action: saveToNewFile, category: 'Document' },
+    { icon: '+', name: 'New Document', description: 'Start a new document', action: clearAll, category: 'Document' },
+    { icon: '◌', name: 'New Ephemeral Document', description: 'Write in pure flow - oldest words dissolve as new thoughts emerge', action: () => { createNewEphemeralDocument(autoSave); setComments([]); setMargin(null); syncMarginProcess(); renderCommentUI(); setSaveStatus('hidden'); }, category: 'Document' },
 
     // Write
-    { name: 'Draft Stage', description: 'Forward-only, focus mode, no spellcheck — just get words out', action: () => applyStage('draft'), category: 'Write' },
-    { name: 'Revise Stage', description: 'Unlock editing and see the whole document', action: () => applyStage('revise'), category: 'Write' },
-    { name: 'Polish Stage', description: 'Spellcheck on for the final pass', action: () => applyStage('polish'), category: 'Write' },
-    { name: 'Retype Document', description: 'Redraft by retyping — the old draft shows a paragraph at a time while you type it fresh', action: () => startRetype(showAlert), category: 'Write' },
-    { name: 'Resume Retype', description: 'Reopen the retype bar where you left off (undo an accidental ⌘.)', action: () => resumeRetype(showAlert), category: 'Write' },
-    { name: 'Recover Last Retype Source', description: 'Load the old draft from your last retype back into the editor', action: () => recoverLastSource(showAlert, showConfirm), category: 'Write' },
-    { name: 'End Retype', description: 'Finish retyping and keep the new draft', action: endRetype, category: 'Write' },
-    { name: 'Toggle Blind Mode', description: 'Write without seeing anything — a running word count keeps you company', action: toggleBlindMode, category: 'Write' },
-    { name: 'Toggle Forward-Only Mode', description: 'Prevent backspace, deletion, and cursor movement', action: toggleForwardOnlyMode, category: 'Write' },
-    { name: 'Change Ephemeral Word Limit', description: 'Set how many words linger before fading into the past', action: changeEphemeralWordLimit, category: 'Write' },
+    { icon: '✎', name: 'Draft Stage', description: 'Forward-only, focus mode, no spellcheck — just get words out', action: () => applyStage('draft'), category: 'Write' },
+    { icon: '☰', name: 'Revise Stage', description: 'Unlock editing and see the whole document', action: () => applyStage('revise'), category: 'Write' },
+    { icon: '✦', name: 'Polish Stage', description: 'Spellcheck on for the final pass', action: () => applyStage('polish'), category: 'Write' },
+    { icon: '⌨︎', name: 'Retype Document', description: 'Redraft by retyping — the old draft shows a paragraph at a time while you type it fresh', action: () => startRetype(showAlert), category: 'Write' },
+    { icon: '▸', name: 'Resume Retype', description: 'Reopen the retype bar where you left off (undo an accidental ⌘.)', action: () => resumeRetype(showAlert), category: 'Write' },
+    { icon: '↺', name: 'Recover Last Retype Source', description: 'Load the old draft from your last retype back into the editor', action: () => recoverLastSource(showAlert, showConfirm), category: 'Write' },
+    { icon: '⚑', name: 'End Retype', description: 'Finish retyping and keep the new draft', action: endRetype, category: 'Write' },
+    { icon: '⊘', name: 'Toggle Blind Mode', description: 'Write without seeing anything — a running word count keeps you company', action: toggleBlindMode, category: 'Write' },
+    { icon: '→', name: 'Toggle Forward-Only Mode', description: 'Prevent backspace, deletion, and cursor movement', action: toggleForwardOnlyMode, category: 'Write' },
+    { icon: '⧖', name: 'Change Ephemeral Word Limit', description: 'Set how many words linger before fading into the past', action: changeEphemeralWordLimit, category: 'Write' },
 
     // Format
-    { name: 'Heading 1', description: 'Format current line(s) as large heading', action: () => applyHeading(1), category: 'Format' },
-    { name: 'Heading 2', description: 'Format current line(s) as medium heading', action: () => applyHeading(2), category: 'Format' },
-    { name: 'Heading 3', description: 'Format current line(s) as small heading', action: () => applyHeading(3), category: 'Format' },
-    { name: 'Normal Text', description: 'Convert current line(s) to normal text', action: convertToNormalText, category: 'Format' },
-    { name: 'Bullet List', description: 'Toggle bullet list for current line(s)', action: () => toggleListType('bullet'), category: 'Format' },
-    { name: 'Numbered List', description: 'Toggle numbered list for current line(s)', action: () => toggleListType('numbered'), category: 'Format' },
-    { name: 'Block Quote', description: 'Format current line(s) as a block quote', action: applyBlockQuote, category: 'Format' },
-    { name: 'Strikethrough Last Word', description: 'Apply strikethrough to the last typed word (type xxxx)', action: strikethroughLastWord, category: 'Format' },
-    { name: 'Delete All Strikethrough', description: 'Remove all struck-through words from document', action: deleteAllStrikethrough, category: 'Format' },
-    { name: 'Delete Block', description: 'Delete current block or selected blocks', action: deleteBlocks, category: 'Format' },
+    { icon: 'H1', name: 'Heading 1', description: 'Format current line(s) as large heading', action: () => applyHeading(1), category: 'Format' },
+    { icon: 'H2', name: 'Heading 2', description: 'Format current line(s) as medium heading', action: () => applyHeading(2), category: 'Format' },
+    { icon: 'H3', name: 'Heading 3', description: 'Format current line(s) as small heading', action: () => applyHeading(3), category: 'Format' },
+    { icon: '¶', name: 'Normal Text', description: 'Convert current line(s) to normal text', action: convertToNormalText, category: 'Format' },
+    { icon: '•', name: 'Bullet List', description: 'Toggle bullet list for current line(s)', action: () => toggleListType('bullet'), category: 'Format' },
+    { icon: '1.', name: 'Numbered List', description: 'Toggle numbered list for current line(s)', action: () => toggleListType('numbered'), category: 'Format' },
+    { icon: '❝', name: 'Block Quote', description: 'Format current line(s) as a block quote', action: applyBlockQuote, category: 'Format' },
+    { icon: '✗', name: 'Strikethrough Last Word', description: 'Apply strikethrough to the last typed word (type xxxx)', action: strikethroughLastWord, category: 'Format' },
+    { icon: '✂︎', name: 'Delete All Strikethrough', description: 'Remove all struck-through words from document', action: deleteAllStrikethrough, category: 'Format' },
+    { icon: '⌫', name: 'Delete Block', description: 'Delete current block or selected blocks', action: deleteBlocks, category: 'Format' },
+    { icon: '↑', name: 'Move Line Up', description: 'Move the current line/block up (⌥↑)', action: () => moveBlocks(-1), category: 'Format' },
+    { icon: '↓', name: 'Move Line Down', description: 'Move the current line/block down (⌥↓)', action: () => moveBlocks(1), category: 'Format' },
+
+    // Comments
+    { icon: '⊕', name: 'Add Comment', description: 'Comment on the selected text (⌘⌥M) — saved into the .md file', action: addCommentOnSelection, category: 'Comments' },
+    { icon: '✳', name: 'Ask Claude', description: 'Comment on the selection, addressed to @claude — the margin answers when it reads', action: askClaudeOnSelection, category: 'Comments' },
+    { icon: '⊛', name: 'Full Read', description: 'Ask Claude to read the whole piece — a general read plus anchored specifics', action: askClaudeFullRead, category: 'Comments' },
+    { icon: '✉', name: 'Invite Claude', description: 'Invite (or revoke) Claude for this file — consent lives in the file itself', action: toggleClaudeInvitation, category: 'Comments' },
+    { icon: '§', name: 'Claude Brief', description: 'Edit how Claude should read this file — handed to every pass', action: editClaudeBrief, category: 'Comments' },
+    { icon: '◈', name: 'Claude Model', description: 'Choose which model reads the margin — applies to every invited file', action: openModelModal, category: 'Comments' },
+    { icon: '›', name: 'Next Comment', description: 'Jump to the next comment in the document (⌘⌥.)', action: () => cycleComment(1), category: 'Comments' },
+    { icon: '‹', name: 'Previous Comment', description: 'Jump to the previous comment in the document (⌘⌥,)', action: () => cycleComment(-1), category: 'Comments' },
+    { icon: '↯', name: 'Toggle Quick Comment Mode', description: 'Select text and just start typing to comment — typing never replaces a selection', action: toggleQuickCommentMode, category: 'Comments' },
+    { icon: '◉', name: 'Toggle Comments', description: 'Show or hide margin comments and their highlights', action: toggleCommentsPanel, category: 'Comments' },
 
     // Navigate
-    { name: 'Find', description: 'Find text in the document (Cmd+F)', action: openFindBar, category: 'Navigate' },
-    { name: 'Jump to Heading', description: 'Navigate to a heading in the document', action: openHeadingModal, category: 'Navigate' },
+    { icon: '⌕', name: 'Find', description: 'Find text in the document (Cmd+F)', action: openFindBar, category: 'Navigate' },
+    { icon: '#', name: 'Jump to Heading', description: 'Navigate to a heading in the document', action: openHeadingModal, category: 'Navigate' },
 
     // View
-    { name: 'Toggle Fade Focus', description: 'Fade the paragraphs around the one you\'re on', action: toggleFocusMode, category: 'View' },
-    { name: 'Toggle Fog Focus', description: 'Blur everything but the line you\'re writing', action: toggleFogMode, category: 'View' },
-    { name: 'Toggle Center Mode', description: 'Keep active line centered in viewport', action: toggleCenterMode, category: 'View' },
-    { name: 'Toggle Page Style', description: 'Switch between page and canvas view', action: togglePageStyle, category: 'View' },
-    { name: 'Toggle Dark Mode', description: 'Switch between light and dark theme', action: toggleDarkMode, category: 'View' },
-    { name: 'Toggle Fullscreen', description: 'Enter/exit fullscreen mode (F11)', action: toggleFullscreen, category: 'View' },
-    { name: 'Toggle Spellcheck', description: 'Show or hide spelling squiggles', action: toggleSpellcheck, category: 'View' },
-    { name: 'Toggle Word Count', description: 'Show/hide word and character count', action: showWordCountToggle, category: 'View' },
-    { name: 'Change Font', description: 'Select font for the editor', action: openFontModal, category: 'View' },
-    { name: 'Increase Font Size', description: 'Make text larger (Ctrl/Cmd + +)', action: increaseFontSize, category: 'View' },
-    { name: 'Decrease Font Size', description: 'Make text smaller (Ctrl/Cmd + -)', action: decreaseFontSize, category: 'View' },
-    { name: 'Increase Line Height', description: 'Make text more spacious (Ctrl/Cmd + ])', action: increaseLineHeight, category: 'View' },
-    { name: 'Decrease Line Height', description: 'Make text more compact (Ctrl/Cmd + [)', action: decreaseLineHeight, category: 'View' },
-    { name: 'Widen Text Column', description: 'Make the text column wider (Ctrl/Cmd + Shift + ])', action: increaseColumnWidth, category: 'View' },
-    { name: 'Narrow Text Column', description: 'Make the text column narrower (Ctrl/Cmd + Shift + [)', action: decreaseColumnWidth, category: 'View' },
+    { icon: '◐', name: 'Toggle Fade Focus', description: 'Fade the paragraphs around the one you\'re on', action: toggleFocusMode, category: 'View' },
+    { icon: '≋', name: 'Toggle Fog Focus', description: 'Blur everything but the line you\'re writing', action: toggleFogMode, category: 'View' },
+    { icon: '⊙', name: 'Toggle Center Mode', description: 'Keep active line centered in viewport', action: toggleCenterMode, category: 'View' },
+    { icon: '▭', name: 'Toggle Page Style', description: 'Switch between page and canvas view', action: togglePageStyle, category: 'View' },
+    { icon: '☾', name: 'Toggle Dark Mode', description: 'Switch between light and dark theme', action: toggleDarkMode, category: 'View' },
+    { icon: '⛶', name: 'Toggle Fullscreen', description: 'Enter/exit fullscreen mode (F11)', action: toggleFullscreen, category: 'View' },
+    { icon: '✓', name: 'Toggle Spellcheck', description: 'Show or hide spelling squiggles', action: toggleSpellcheck, category: 'View' },
+    { icon: '№', name: 'Toggle Word Count', description: 'Show/hide word and character count', action: showWordCountToggle, category: 'View' },
+    { icon: '◉', name: 'Toggle Comment Count in Pill', description: 'Show the open-comment count beside the word count', action: toggleCommentCountInPill, category: 'View' },
+    { icon: 'Aa', name: 'Change Font', description: 'Select font for the editor', action: openFontModal, category: 'View' },
+    { icon: 'A+', name: 'Increase Font Size', description: 'Make text larger (Ctrl/Cmd + +)', action: increaseFontSize, category: 'View' },
+    { icon: 'A−', name: 'Decrease Font Size', description: 'Make text smaller (Ctrl/Cmd + -)', action: decreaseFontSize, category: 'View' },
+    { icon: '↕︎', name: 'Increase Line Height', description: 'Make text more spacious (Ctrl/Cmd + ])', action: increaseLineHeight, category: 'View' },
+    { icon: '↕︎', name: 'Decrease Line Height', description: 'Make text more compact (Ctrl/Cmd + [)', action: decreaseLineHeight, category: 'View' },
+    { icon: '↔︎', name: 'Widen Text Column', description: 'Make the text column wider (Ctrl/Cmd + Shift + ])', action: increaseColumnWidth, category: 'View' },
+    { icon: '↔︎', name: 'Narrow Text Column', description: 'Make the text column narrower (Ctrl/Cmd + Shift + [)', action: decreaseColumnWidth, category: 'View' },
 
     // Share
-    { name: 'Copy All', description: 'Copy all content to clipboard', action: copyAll, category: 'Share' },
-    { name: 'Copy as Markdown', description: 'Copy content as Markdown to clipboard', action: copyAsMarkdown, category: 'Share' },
-    { name: 'Export as Markdown', description: 'Download a copy as a .md file', action: exportAsMarkdown, category: 'Share' },
-    { name: 'Export as Word', description: 'Download content as Word (.docx) file', action: exportAsWord, category: 'Share' },
-    { name: 'Print', description: 'Print the document or save as PDF', action: () => window.print(), category: 'Share' },
+    { icon: '⧉', name: 'Copy All', description: 'Copy all content to clipboard', action: copyAll, category: 'Share' },
+    { icon: 'M↓', name: 'Copy as Markdown', description: 'Copy content as Markdown to clipboard', action: copyAsMarkdown, category: 'Share' },
+    { icon: '↗︎', name: 'Export as Markdown', description: 'Download a copy as a .md file', action: exportAsMarkdown, category: 'Share' },
+    { icon: 'W', name: 'Export as Word', description: 'Download content as Word (.docx) file', action: exportAsWord, category: 'Share' },
+    { icon: '⎙', name: 'Print', description: 'Print the document or save as PDF', action: () => window.print(), category: 'Share' },
 
     // App
-    { name: 'Show Intro', description: 'What is this?', action: showIntro, category: 'App' },
-    { name: 'Clear Storage', description: 'Clear the autosaved draft from browser memory', action: clearStorage, category: 'App' },
+    { icon: '⌨', name: 'Shortcuts & Guide', description: 'Every keyboard shortcut, plus what each mode and feature does — expand any row for help', action: showGuide, category: 'App' },
+    { icon: '?', name: 'Show Intro', description: 'What is this?', action: showIntro, category: 'App' },
+    { icon: '⌦', name: 'Clear Storage', description: 'Clear the autosaved draft from browser memory', action: clearStorage, category: 'App' },
 ];
 
 // ──────────────────────────────────
@@ -545,27 +934,112 @@ const commandSearch = document.getElementById('command-search');
 const commandList = document.getElementById('command-list');
 const modeStatus = document.getElementById('mode-status');
 
-function filterCommands(searchTerm) {
-    const term = searchTerm.toLowerCase().trim();
-    const matches = (cmd) =>
-        cmd.name.toLowerCase().includes(term) || cmd.description.toLowerCase().includes(term);
+// Cold-start "commonness" so a fresh install already ranks the everyday
+// commands sensibly — e.g. "full" should mean Toggle Fullscreen, not Full Read.
+// These are just seeds; real usage (recordCommandUsage) is added on top and
+// takes over as you use the app. Keyed by command name.
+const COMMAND_PRIORS = {
+    'Toggle Fullscreen': 4,
+    'Toggle Dark Mode': 4,
+    'Save': 4,
+    'Open File': 3,
+    'Find': 3,
+    'New Document': 3,
+    'Export as Word': 3,
+    'Export as Markdown': 3,
+    'Copy All': 2,
+};
 
-    // Build a flat display order grouped by category, plus header markers
-    const entries = [];
-    const flat = [];
-    for (const category of CATEGORY_ORDER) {
-        const inCategory = commands.filter(c => c.category === category && matches(c));
-        if (inCategory.length === 0) continue;
-        entries.push({ header: category });
-        for (const command of inCategory) {
-            entries.push({ command });
-            flat.push(command);
+// Frequency nudge for a command, bounded so it only ever tips *close* matches:
+// capped below the gap between match tiers, so a merely-popular description
+// match can never outrank a genuine name match. Seed + learned count.
+const USAGE_BOOST_CAP = 5;
+function usageBoost(cmd) {
+    const used = (COMMAND_PRIORS[cmd.name] || 0) + (state.commandUsage[cmd.name] || 0);
+    return Math.min(USAGE_BOOST_CAP, used);
+}
+
+// Count a run so search learns what you reach for. Only the boost cap's worth
+// of counts ever matters, so no need to bound growth beyond that.
+function recordCommandUsage(cmd) {
+    state.commandUsage[cmd.name] = (state.commandUsage[cmd.name] || 0) + 1;
+    try { localStorage.setItem('commandUsage', JSON.stringify(state.commandUsage)); } catch (e) {}
+}
+
+// A query is split on whitespace into tokens; every token must match somewhere
+// in a command for it to appear ("tog com" finds "Toggle Comments"). Matching
+// looks at name, icon, description, and category, then nudges by frequency.
+function scoreCommand(cmd, tokens) {
+    const name = cmd.name.toLowerCase();
+    const desc = cmd.description.toLowerCase();
+    const cat = cmd.category.toLowerCase();
+    const icon = (cmd.icon || '').toLowerCase();
+
+    let score = 0;
+    for (const tok of tokens) {
+        let best = 0;
+        const ni = name.indexOf(tok);
+        if (ni !== -1) {
+            best = 10;
+            if (ni === 0) best += 6;                    // name starts with the token
+            else if (name[ni - 1] === ' ') best += 4;   // token starts a word in the name
         }
+        if (best === 0 && icon && icon.indexOf(tok) !== -1) best = 8;  // e.g. "h1" → Heading 1
+        if (best === 0) {
+            const di = desc.indexOf(tok);
+            if (di !== -1) {
+                best = 3;
+                if (di === 0 || desc[di - 1] === ' ') best += 1;
+            }
+        }
+        if (best === 0 && cat.indexOf(tok) !== -1) best = 2;
+        if (best === 0) return null;   // this token matched nowhere → command excluded
+        score += best;
     }
 
-    state.filteredCommandsList = flat;
+    // Keep an exact multi-word phrase in the name ("toggle comments") ahead of
+    // the same tokens found scattered across different commands.
+    if (tokens.length > 1 && name.indexOf(tokens.join(' ')) !== -1) score += 5;
+    score += usageBoost(cmd);
+    return score;
+}
+
+function filterCommands(searchTerm) {
+    const tokens = searchTerm.toLowerCase().trim().split(/\s+/).filter(Boolean);
+
+    // No query: calm, category-grouped browse view (with header markers).
+    if (tokens.length === 0) {
+        const entries = [];
+        const flat = [];
+        for (const category of CATEGORY_ORDER) {
+            const inCategory = commands.filter(c => c.category === category);
+            if (inCategory.length === 0) continue;
+            entries.push({ header: category });
+            for (const command of inCategory) {
+                entries.push({ command });
+                flat.push(command);
+            }
+        }
+        state.filteredCommandsList = flat;
+        state.selectedCommandIndex = 0;
+        renderCommands(entries);
+        return;
+    }
+
+    // Active search: rank every match, best first, as a flat list (no headers).
+    // Equal scores prefer the tighter match — the shorter name covers the same
+    // tokens more completely ("tog com" → Toggle Comments over Toggle Comment
+    // Count in Pill) — then fall back to original order so the list is stable.
+    const ranked = commands
+        .map((command, index) => ({ command, index, score: scoreCommand(command, tokens) }))
+        .filter(e => e.score !== null)
+        .sort((a, b) => b.score - a.score
+            || a.command.name.length - b.command.name.length
+            || a.index - b.index);
+
+    state.filteredCommandsList = ranked.map(e => e.command);
     state.selectedCommandIndex = 0;
-    renderCommands(entries);
+    renderCommands(ranked.map(e => ({ command: e.command })));
 }
 
 function renderCommands(entries) {
@@ -598,7 +1072,12 @@ function renderCommands(entries) {
 
         const nameEl = document.createElement('div');
         nameEl.className = 'command-name';
-        nameEl.textContent = command.name;
+        const iconEl = document.createElement('span');
+        iconEl.className = 'command-icon';
+        iconEl.setAttribute('aria-hidden', 'true');
+        iconEl.textContent = command.icon || '';
+        nameEl.appendChild(iconEl);
+        nameEl.appendChild(document.createTextNode(command.name));
 
         const descEl = document.createElement('div');
         descEl.className = 'command-description';
@@ -643,6 +1122,13 @@ function renderStatusHeader() {
     if (state.currentDocumentIsEphemeral) modes.push('Ephemeral');
     if (document.body.classList.contains('dark-mode')) modes.push('Dark');
     if (state.wordCountVisible) modes.push('Word count');
+    if (state.quickCommentMode) modes.push('Quick comment');
+    if (state.marginActivity === 'reading') modes.push('Claude is reading…');
+    else if (state.marginActivity === 'checking') modes.push('Claude is checking sources…');
+    else if (state.margin && state.margin.invited) modes.push('Claude invited');
+    const openComments = openCommentCount();
+    if (openComments > 0) modes.push(`${openComments} open comment${openComments === 1 ? '' : 's'}`);
+    if (state.newClaudeArrivals > 0) modes.push(`${state.newClaudeArrivals} new in margin`);
 
     if (modes.length > 0) {
         const row = document.createElement('div');
@@ -668,16 +1154,21 @@ function executeCommand(command) {
     }
     state.slashPosition = null;
     state.commandModalOpen = false;
+    state.newClaudeArrivals = 0;   // the badge was seen — it shows once
     commandModal.classList.add('hidden');
     state.multiBlockSelection = [];
 
+    recordCommandUsage(command);
     recordCheckpoint();
     command.action();
 
     editor.focus();
 }
 
-function showCommandModal() {
+// anchorRect (optional): position the modal against this rect instead of the
+// caret \u2014 used when the menu is summoned from outside the editor (the comments
+// pane), where there's no editor selection to anchor to.
+function showCommandModal(anchorRect) {
     state.commandModalOpen = true;
     commandModal.classList.remove('hidden');
     commandModal.style.opacity = '0';
@@ -687,32 +1178,36 @@ function showCommandModal() {
 
     renderStatusHeader();
 
-    // Position modal near cursor
+    // Position modal near cursor (or the given anchor)
     setTimeout(() => {
-        const selection = window.getSelection();
-        if (selection.rangeCount > 0) {
-            const range = selection.getRangeAt(0);
-            let rect = null;
-            const rects = range.getClientRects();
-            if (rects.length > 0) rect = rects[rects.length - 1];
+        let rect = anchorRect || null;
+        if (!rect) {
+            const selection = window.getSelection();
+            if (selection.rangeCount > 0) {
+                const range = selection.getRangeAt(0);
+                const rects = range.getClientRects();
+                if (rects.length > 0) rect = rects[rects.length - 1];
 
-            if (!rect || (rect.width === 0 && rect.height === 0 && rect.top === 0 && rect.left === 0)) {
-                const marker = document.createElement('span');
-                marker.style.display = 'inline';
-                marker.textContent = '\u200B';
-                const mr = range.cloneRange();
-                mr.insertNode(marker);
-                rect = marker.getBoundingClientRect();
-                marker.remove();
-                const cb = getCurrentBlock();
-                if (cb) { const bc = cb.querySelector('.block-content'); if (bc) bc.normalize(); }
+                if (!rect || (rect.width === 0 && rect.height === 0 && rect.top === 0 && rect.left === 0)) {
+                    const marker = document.createElement('span');
+                    marker.style.display = 'inline';
+                    marker.textContent = '\u200B';
+                    const mr = range.cloneRange();
+                    mr.insertNode(marker);
+                    rect = marker.getBoundingClientRect();
+                    marker.remove();
+                    const cb = getCurrentBlock();
+                    if (cb) { const bc = cb.querySelector('.block-content'); if (bc) bc.normalize(); }
+                }
+
+                if (!rect || (rect.top < 5 && rect.left < 5)) {
+                    const cb = getCurrentBlock();
+                    if (cb) { const bc = cb.querySelector('.block-content'); rect = (bc || cb).getBoundingClientRect(); }
+                }
             }
+        }
 
-            if (!rect || (rect.top < 5 && rect.left < 5)) {
-                const cb = getCurrentBlock();
-                if (cb) { const bc = cb.querySelector('.block-content'); rect = (bc || cb).getBoundingClientRect(); }
-            }
-
+        if (rect) {
             let left = rect.left;
             let top = rect.bottom + 5;
             const modalWidth = 350;
@@ -733,8 +1228,42 @@ function showCommandModal() {
     }, 0);
 }
 
+// Summon the command menu from outside the editor (the comments pane). There's
+// no editor selection to anchor to or return to, so position against the panel
+// and just open \u2014 pane-side work like turning the pane off is then one
+// keystroke away, exactly as '/' is in the editor.
+function openCommandModalFromPanel() {
+    if (state.commandModalOpen) return;
+    if (!document.getElementById('intro-modal').classList.contains('hidden')) return;
+    state.savedSelection = null;
+    state.slashPosition = null;
+    state.multiBlockSelection = [];
+    const panelEl = document.getElementById('comments-panel');
+    const r = (panelEl && !panelEl.classList.contains('hidden')) ? panelEl.getBoundingClientRect() : null;
+    const anchor = (r && r.width)
+        ? { left: r.left, right: r.right, top: r.top, bottom: r.top }
+        : { left: window.innerWidth / 2 - 175, right: window.innerWidth / 2 + 175, top: 60, bottom: 60 };
+    showCommandModal(anchor);
+}
+
+// '/' opens the command menu from anywhere that isn't the editor or a text
+// field \u2014 most usefully the comments pane, where focus sits on a card (or on
+// <body> after a card click) and the editor's own '/' handler never sees it.
+// Capture phase so it beats the reply/edit textareas' stopPropagation; the
+// text-field guard leaves literal slashes typable in those boxes.
+document.addEventListener('keydown', (event) => {
+    if (event.key !== '/' || state.commandModalOpen) return;
+    if (!document.getElementById('intro-modal').classList.contains('hidden')) return;
+    const el = event.target;
+    if (el === editor || (el && el.closest && el.closest('#editor'))) return;   // editor handles its own '/'
+    if (el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable)) return;   // let slashes type
+    event.preventDefault();
+    openCommandModalFromPanel();
+}, true);
+
 function hideCommandModal() {
     state.commandModalOpen = false;
+    state.newClaudeArrivals = 0;   // the badge was seen — it shows once
     commandModal.classList.add('hidden');
     state.slashPosition = null;
     state.multiBlockSelection = [];
@@ -792,12 +1321,56 @@ document.addEventListener('click', (event) => {
 // ──────────────────────────────────
 // Editor keydown handler
 // ──────────────────────────────────
+// Keyboard navigation must keep the caret on screen. WebKit stops auto-
+// revealing the caret after programmatic selection changes (seen with the
+// comments pane open), so assert it ourselves once the move has happened.
+// Caret to one end of a block's text. End and ⌘→ stop at the end of the visual
+// line; in a wrapped paragraph that isn't the end of the paragraph, and nothing
+// else gets you there in one press.
+function caretToEdgeOf(block, atEnd) {
+    const content = block && block.querySelector('.block-content');
+    if (!content) return;
+    const range = document.createRange();
+    range.selectNodeContents(content);
+    range.collapse(!atEnd);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+}
+
+const CARET_NAV_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageUp', 'PageDown', 'Home', 'End']);
+editor.addEventListener('keydown', (event) => {
+    if (!CARET_NAV_KEYS.has(event.key)) return;
+    if (state.centerMode) return; // center mode pins the caret line itself
+    requestAnimationFrame(revealCaret);
+});
+
 editor.addEventListener('keydown', (event) => {
     // Retype navigation (⌘↓ / ⌘↑ / ⌘.)
     if (state.retypeActive && (event.metaKey || event.ctrlKey)) {
         if (event.key === 'ArrowDown') { event.preventDefault(); retypeNext(); return; }
         if (event.key === 'ArrowUp') { event.preventDefault(); retypePrev(); return; }
         if (event.key === '.') { event.preventDefault(); endRetype(); return; }
+    }
+
+    // ⌘↓ / ⌘↑ — the ends of the paragraph you're in, not the ends of the
+    // document. WebKit's native behaviour throws you to the far end of the file
+    // and gives you nothing to find your way back with, so an accidental press
+    // costs a hunt. The distance is the problem, not the direction: a move that
+    // stays inside the paragraph can't lose your place, so there is nothing to
+    // recover from and no state to keep. Fills a real gap too — End and ⌘→ stop
+    // at the end of the visual line, which in a wrapped paragraph isn't the end
+    // of the paragraph.
+    if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey
+        && (event.key === 'ArrowDown' || event.key === 'ArrowUp')
+        && !state.forwardOnlyMode && !state.blindMode) {
+        const block = getCurrentBlock();
+        if (!block) return;
+        event.preventDefault();
+        caretToEdgeOf(block, event.key === 'ArrowDown');
+        updateFocusParagraph();
+        requestAnimationFrame(revealCaret);
+        return;
     }
 
     // Center mode: prevent cursor from entering spacers
@@ -903,6 +1476,9 @@ editor.addEventListener('keydown', (event) => {
         cb.parentNode.insertBefore(nb, cb.nextSibling);
         if (type === 'numbered' || newType === 'numbered') updateNumberedBlocks();
         focusBlock(nb);
+        // Splits don't fire 'input' (the keydown is preventDefaulted) — reflow
+        // the comment cards alongside the moved text
+        positionCards();
         return;
     }
 
@@ -953,7 +1529,17 @@ editor.addEventListener('keydown', (event) => {
         };
         if (isAtBlockStart()) {
             event.preventDefault();
-            const prev = cb.previousElementSibling;
+            let prev = cb.previousElementSibling;
+            // A non-block, non-spacer sibling is editing debris (normalize
+            // handles the known shapes, but this is the writer's own gesture
+            // for "delete the thing above me" — honor it directly)
+            if (prev && !prev.classList.contains('block') && !prev.hasAttribute('data-spacer')) {
+                recordCheckpoint();
+                prev.remove();
+                autoSave();
+                positionCards();
+                return;
+            }
             if (!prev || !prev.classList.contains('block')) return;
             const pce = prev.querySelector('.block-content'); if (!pce) return;
             recordCheckpoint();
@@ -975,6 +1561,68 @@ editor.addEventListener('keydown', (event) => {
             r.collapse(true);
             sel.removeAllRanges(); sel.addRange(r);
             autoSave();
+            positionCards();
+            return;
+        }
+    }
+
+    // Forward delete — merge the next block up. Without this the keystroke
+    // fell through to WebKit, whose native merge doesn't know the block
+    // structure and leaves the debris normalizeBlocks exists to clean up.
+    // Mirror of the Backspace merge above.
+    if (event.key === 'Delete') {
+        const sel = window.getSelection();
+        if (!sel.rangeCount || !sel.isCollapsed) return;
+        const cb = getCurrentBlock(); if (!cb) return;
+        const ce = cb.querySelector('.block-content'); if (!ce) return;
+
+        const range = sel.getRangeAt(0);
+        // At block end: nothing after the caret up to the content root, save
+        // for the trailing <br> an empty or just-split block carries
+        const isAtBlockEnd = () => {
+            let node = range.startContainer;
+            if (node.nodeType === Node.TEXT_NODE && range.startOffset < node.length) return false;
+            if (node.nodeType === Node.ELEMENT_NODE) {
+                for (let i = range.startOffset; i < node.childNodes.length; i++) {
+                    const c = node.childNodes[i];
+                    if (c.nodeName !== 'BR' && (c.textContent || '').length > 0) return false;
+                }
+            }
+            while (node && node !== ce) {
+                for (let sib = node.nextSibling; sib; sib = sib.nextSibling) {
+                    if (sib.nodeName !== 'BR' && (sib.textContent || '').length > 0) return false;
+                }
+                node = node.parentNode;
+            }
+            return node === ce;
+        };
+        if (isAtBlockEnd()) {
+            event.preventDefault();
+            const next = cb.nextElementSibling;
+            if (!next || next.hasAttribute('data-spacer')) return;
+            recordCheckpoint();
+            // Debris after the caret is deleted whole, same as backspace above
+            if (!next.classList.contains('block')) { next.remove(); autoSave(); positionCards(); return; }
+            const nce = next.querySelector('.block-content');
+            if (!nce) { next.remove(); autoSave(); positionCards(); return; }
+
+            if (ce.lastChild && ce.lastChild.nodeName === 'BR') ce.removeChild(ce.lastChild);
+            const anchor = ce.lastChild;
+            while (nce.firstChild) {
+                if (nce.firstChild.nodeName === 'BR') { nce.removeChild(nce.firstChild); continue; }
+                ce.appendChild(nce.firstChild);
+            }
+            next.remove();
+            if (ce.childNodes.length === 0) ce.innerHTML = '<br>';
+            updateNumberedBlocks();
+
+            const r = document.createRange();
+            if (anchor && anchor.parentNode === ce) r.setStartAfter(anchor);
+            else r.setStart(ce, 0);
+            r.collapse(true);
+            sel.removeAllRanges(); sel.addRange(r);
+            autoSave();
+            positionCards();
             return;
         }
     }
@@ -1055,28 +1703,7 @@ editor.addEventListener('keydown', (event) => {
     // Alt+Arrow — move blocks
     if (event.altKey && !event.shiftKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
         event.preventDefault();
-        recordCheckpoint();
-        let blocks;
-        if (state.multiBlockSelection.length > 0) blocks = state.multiBlockSelection;
-        else { const sel = getSelectedBlocks(); blocks = sel.length > 1 ? sel : [getCurrentBlock()]; }
-        if (!blocks[0]) return;
-
-        if (event.key === 'ArrowUp') {
-            if (!blocks[0].previousElementSibling) return;
-            const target = blocks[0].previousElementSibling;
-            for (let i = 0; i < blocks.length; i++) editor.insertBefore(blocks[i], target);
-        } else {
-            const last = blocks[blocks.length - 1];
-            if (!last.nextElementSibling) return;
-            const nextBlock = last.nextElementSibling;
-            const targetPos = nextBlock.nextElementSibling;
-            for (let i = blocks.length - 1; i >= 0; i--) {
-                if (targetPos) editor.insertBefore(blocks[i], targetPos);
-                else editor.appendChild(blocks[i]);
-            }
-        }
-        updateNumberedBlocks(); autoSave();
-        if (blocks.length === 1) focusBlock(blocks[0]);
+        moveBlocks(event.key === 'ArrowUp' ? -1 : 1);
         return;
     }
 
@@ -1093,6 +1720,19 @@ editor.addEventListener('keydown', (event) => {
     // Cmd+B / Cmd+I — formatting
     if ((event.ctrlKey || event.metaKey) && event.key === 'b') { event.preventDefault(); recordCheckpoint(); applyFormatting('bold'); return; }
     if ((event.ctrlKey || event.metaKey) && event.key === 'i') { event.preventDefault(); recordCheckpoint(); applyFormatting('italic'); return; }
+
+    // Cmd+Alt+M — comment on selection (event.code: Alt+M types 'µ' on mac)
+    if ((event.ctrlKey || event.metaKey) && event.altKey && event.code === 'KeyM') { event.preventDefault(); addCommentOnSelection(); return; }
+
+    // Cmd+Alt+. / Cmd+Alt+, — cycle through comments
+    if ((event.ctrlKey || event.metaKey) && event.altKey && event.code === 'Period') { event.preventDefault(); cycleComment(1); return; }
+    if ((event.ctrlKey || event.metaKey) && event.altKey && event.code === 'Comma') { event.preventDefault(); cycleComment(-1); return; }
+
+    // Quick comment mode: typing over a selection comments instead of replacing
+    // ('/' stays reserved for the command menu)
+    if (event.key.length === 1 && event.key !== '/' && !event.metaKey && !event.ctrlKey && !event.altKey && !state.commandModalOpen) {
+        if (quickCommentFromTyping(event.key)) { event.preventDefault(); return; }
+    }
 
     // Font size shortcuts
     if ((event.ctrlKey || event.metaKey) && (event.key === '=' || event.key === '+')) { event.preventDefault(); increaseFontSize(); return; }
@@ -1113,7 +1753,8 @@ editor.addEventListener('keydown', (event) => {
 
     // Slash — command modal
     const introModal = document.getElementById('intro-modal');
-    if (event.key === '/' && !state.commandModalOpen && introModal.classList.contains('hidden')) {
+    const guideModalEl = document.getElementById('guide-modal');
+    if (event.key === '/' && !state.commandModalOpen && introModal.classList.contains('hidden') && guideModalEl.classList.contains('hidden')) {
         event.preventDefault();
         event.stopPropagation();
         event.stopImmediatePropagation();
@@ -1216,6 +1857,28 @@ editor.addEventListener('beforeinput', (event) => {
     else if (event.inputType === 'historyRedo') { event.preventDefault(); doRedo(); }
 });
 
+// Any edit about to swallow a non-collapsed selection gets a checkpoint FIRST.
+// The typing debounce only records state 500ms after a burst ends — text typed
+// and then immediately selected-and-replaced would otherwise exist in no
+// snapshot, making the replacement unrecoverable by undo.
+editor.addEventListener('beforeinput', (event) => {
+    if (event.inputType === 'historyUndo' || event.inputType === 'historyRedo') return;
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount && !sel.isCollapsed) recordCheckpoint();
+});
+
+// Quick comment mode backstop for insertions that never arrive as plain
+// keydowns (Option-key characters, autocorrect replacements): the mode's
+// contract is that typing never replaces a selection. Composition insertions
+// aren't cancelable, so dead-key input can still replace — the checkpoint
+// above keeps even that undoable.
+editor.addEventListener('beforeinput', (event) => {
+    if (event.isComposing || event.inputType !== 'insertText' || !event.data) return;
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || sel.isCollapsed) return;
+    if (quickCommentFromTyping(event.data)) event.preventDefault();
+});
+
 // Prevent typing outside blocks
 editor.addEventListener('beforeinput', (event) => {
     if (!event.inputType.startsWith('insert') && !event.inputType.startsWith('delete')) return;
@@ -1245,6 +1908,11 @@ editor.addEventListener('beforeinput', (event) => {
 
 // Editor input handler
 editor.addEventListener('input', (event) => {
+    // Native edits we didn't intercept (forward delete, cross-block deletions,
+    // cut, dictation) can leave DOM that isn't a well-formed block — visible as
+    // a blank line nothing can delete. Repair before anything else reads it.
+    normalizeBlocks();
+
     // Deleting everything removes the last block and leaves the caret in the bare
     // editor, above where a first line renders — rebuild immediately, caret inside
     if (!editor.querySelector('.block')) {
@@ -1363,6 +2031,31 @@ editor.addEventListener('copy', (event) => {
     event.clipboardData.setData('text/html', htmlParts.join(''));
 });
 
+// Drop already-sanitized inline HTML in at the caret, replacing any selection.
+// Returns false if the caret isn't in the editor, so the caller can fall back
+// to making blocks.
+function insertInlineAtCaret(html) {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return false;
+    const range = sel.getRangeAt(0);
+    const content = range.commonAncestorContainer;
+    const host = content.nodeType === Node.ELEMENT_NODE ? content : content.parentElement;
+    if (!host || !host.closest('.block-content')) return false;
+
+    range.deleteContents();
+    const frag = document.createRange().createContextualFragment(html);
+    const last = frag.lastChild;
+    range.insertNode(frag);
+    if (last) {
+        const after = document.createRange();
+        after.setStartAfter(last);
+        after.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(after);
+    }
+    return true;
+}
+
 // Paste handler
 editor.addEventListener('paste', (event) => {
     const cd = event.clipboardData; if (!cd) return;
@@ -1388,32 +2081,28 @@ editor.addEventListener('paste', (event) => {
         }
     }
 
-    if (html && (html.includes('<ul') || html.includes('<ol'))) {
+    // Rich paste. The source document's styling — its fonts, sizes, colours,
+    // link chrome — is not ours to carry; what survives is the formatting that
+    // means something here: bold, italic, strike. See sanitize.js.
+    if (html) {
         event.preventDefault();
-        const temp = document.createElement('div'); temp.innerHTML = html;
-        const blocks = [];
-        const convert = (node, level = 0) => {
-            if (node.nodeName === 'UL' || node.nodeName === 'OL') {
-                const type = node.nodeName === 'UL' ? 'bullet' : 'numbered';
-                Array.from(node.children).forEach(child => {
-                    if (child.nodeName === 'LI') {
-                        let text = '';
-                        Array.from(child.childNodes).forEach(n => { if (n.nodeType === Node.TEXT_NODE) text += n.textContent; });
-                        if (text.trim()) blocks.push(createBlockElement(type, text.trim(), level));
-                        Array.from(child.children).forEach(n => { if (n.nodeName === 'UL' || n.nodeName === 'OL') convert(n, level + 1); });
-                    }
-                });
-            } else if (node.nodeName === 'P' || node.nodeName === 'DIV') {
-                const text = node.textContent.trim();
-                if (text) blocks.push(createBlockElement('text', text, 0));
-            }
-        };
-        Array.from(temp.children).forEach(c => convert(c));
+        const parsed = blocksFromPastedHTML(html);
+        if (parsed.length === 0) { centerCurrentBlock(true); enforceEphemeralLimit(); return; }
 
+        // One plain paragraph joins the sentence you're in, rather than
+        // becoming a block of its own.
+        if (parsed.length === 1 && parsed[0].type === 'text' && insertInlineAtCaret(parsed[0].html)) {
+            autoSave();
+            centerCurrentBlock(true); enforceEphemeralLimit();
+            return;
+        }
+
+        const blocks = parsed.map(b => createBlockElement(b.type, b.html, b.level));
         const cb = getCurrentBlock();
         if (cb && blocks.length > 0) {
             blocks.forEach(b => cb.parentNode.insertBefore(b, cb.nextSibling));
             updateNumberedBlocks(); focusBlock(blocks[blocks.length - 1], true);
+            autoSave();
         }
     }
     centerCurrentBlock(true); enforceEphemeralLimit();
@@ -1436,7 +2125,7 @@ editor.addEventListener('contextmenu', (event) => { if (state.forwardOnlyMode ||
 document.addEventListener('selectionchange', () => {
     if (state.fogMode) updateFogBlock();
     if (state.centerMode) {
-        const anyModalOpen = ['command-modal', 'font-modal', 'heading-modal', 'recent-modal', 'intro-modal', 'dialog-modal', 'find-bar']
+        const anyModalOpen = ['command-modal', 'font-modal', 'model-modal', 'heading-modal', 'recent-modal', 'intro-modal', 'guide-modal', 'dialog-modal', 'find-bar']
             .some(id => !document.getElementById(id).classList.contains('hidden'));
         if (anyModalOpen) return;
 
@@ -1469,7 +2158,7 @@ const introModal = document.getElementById('intro-modal');
 const recentModal = document.getElementById('recent-modal');
 
 // Close on click outside
-[fontModal, headingModal, recentModal].forEach(m => closeOnClickOutside(m));
+[fontModal, headingModal, recentModal, document.getElementById('model-modal')].forEach(m => closeOnClickOutside(m));
 
 // Recent files modal
 document.getElementById('recent-cancel-button').addEventListener('click', () => closeModal(recentModal));
@@ -1498,6 +2187,8 @@ document.getElementById('find-input').addEventListener('keydown', (event) => {
 });
 
 introModal.addEventListener('click', (e) => { if (e.target === introModal) { introModal.classList.add('hidden'); editor.focus(); } });
+// Intro's "Shortcuts & Guide" link — close the intro and open the guide
+introModal.addEventListener('click', (e) => { if (e.target.closest('#intro-guide-link')) { e.preventDefault(); introModal.classList.add('hidden'); showGuide(); } });
 
 // Font modal
 document.getElementById('font-cancel-button').addEventListener('click', closeFontModal);
@@ -1533,6 +2224,21 @@ document.getElementById('heading-search').addEventListener('input', () => {
     renderHeadings(headings);
 });
 
+// Claude model modal
+document.getElementById('model-cancel-button').addEventListener('click', () => closeModal(document.getElementById('model-modal')));
+document.getElementById('model-search').addEventListener('input', () => {
+    state.selectedModelIndex = 0;
+    renderModels(filteredModels());
+});
+
+attachModalKeyboardNav(document.getElementById('model-search'), document.getElementById('model-modal'), {
+    getItems: () => document.getElementById('model-list').querySelectorAll('.font-item'),
+    getSelectedIndex: () => state.selectedModelIndex,
+    setSelectedIndex: (i) => { state.selectedModelIndex = i; },
+    onEnter: (idx) => { const m = filteredModels()[idx]; if (m) applyModel(m.id); },
+    onFilter: () => renderModels(filteredModels()),
+});
+
 attachModalKeyboardNav(document.getElementById('heading-search'), headingModal, {
     getItems: () => document.getElementById('heading-list').querySelectorAll('.heading-item'),
     getSelectedIndex: () => state.selectedHeadingIndex,
@@ -1554,15 +2260,46 @@ document.addEventListener('keydown', (event) => {
     if (!introModal.classList.contains('hidden') && (event.key === 'Escape' || event.key === '/')) { event.preventDefault(); introModal.classList.add('hidden'); editor.focus(); }
 });
 
+// Shortcuts & guide modal
+const guideModal = document.getElementById('guide-modal');
+const guideBody = document.getElementById('guide-body');
+const guideExpandToggle = document.getElementById('guide-expand-toggle');
+
+function closeGuide() { closeModal(guideModal); }
+function toggleGuideRow(row) { if (row && row.classList.contains('has-detail')) row.classList.toggle('expanded'); }
+
+closeOnClickOutside(guideModal);
+guideBody.addEventListener('click', (e) => {
+    const head = e.target.closest('.guide-row-head');
+    if (head) toggleGuideRow(head.parentElement);
+});
+guideBody.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const head = e.target.closest('.guide-row-head');
+    if (head) { e.preventDefault(); toggleGuideRow(head.parentElement); }
+});
+guideExpandToggle.addEventListener('click', () => {
+    const rows = Array.from(guideModal.querySelectorAll('.guide-row.has-detail'));
+    const anyCollapsed = rows.some(r => !r.classList.contains('expanded'));
+    rows.forEach(r => r.classList.toggle('expanded', anyCollapsed));
+    guideExpandToggle.textContent = anyCollapsed ? 'Collapse all' : 'Expand all';
+});
+document.addEventListener('keydown', (event) => {
+    if (!guideModal.classList.contains('hidden') && (event.key === 'Escape' || event.key === '/')) { event.preventDefault(); event.stopPropagation(); closeGuide(); }
+});
+
 // File input fallback
 document.getElementById('markdown-file-input').addEventListener('change', (event) => {
     const file = event.target.files[0]; if (!file) return;
     const reader = new FileReader();
     reader.onload = (e) => {
-        const blocks = markdownToBlocks(e.target.result);
+        const { prose, comments, raw } = splitComments(e.target.result);
+        const blocks = markdownToBlocks(prose);
         editor.innerHTML = '';
         blocks.forEach(b => editor.appendChild(b));
         updateNumberedBlocks();
+        setComments(comments, raw);
+        renderCommentUI();
         resetHistory();
         if (blocks.length > 0) focusBlock(blocks[0]);
         document.getElementById('markdown-file-input').value = '';
@@ -1611,6 +2348,7 @@ if (window.visualViewport) {
 // Initialization
 // ──────────────────────────────────
 // Load preferences
+try { state.commandUsage = JSON.parse(localStorage.getItem('commandUsage')) || {}; } catch (e) { state.commandUsage = {}; }
 if (localStorage.getItem('darkMode') === 'true') document.body.classList.add('dark-mode');
 if (localStorage.getItem('canvasMode') === 'true') document.body.classList.add('canvas-mode');
 if (localStorage.getItem('forwardOnlyMode') === 'true') { state.forwardOnlyMode = true; document.body.classList.add('forward-only-mode'); }
@@ -1619,16 +2357,47 @@ if (localStorage.getItem('focusMode') === 'true') { state.focusMode = true; docu
 const savedLimit = localStorage.getItem('ephemeralWordLimit');
 if (savedLimit) { const p = parseInt(savedLimit, 10); if (!isNaN(p) && p > 0) state.EPHEMERAL_WORD_LIMIT = p; }
 if (localStorage.getItem('wordCountVisible') === 'true') { state.wordCountVisible = true; document.getElementById('word-count-display').classList.remove('hidden'); }
+state.commentCountInPill = localStorage.getItem('commentCountInPill') === 'true';
 const savedSpellcheck = localStorage.getItem('spellcheck');
 editor.spellcheck = savedSpellcheck === null ? true : savedSpellcheck === 'true';
 state.currentStage = localStorage.getItem('writingStage');
 
 // Load autosaved content, then re-attach the synced file (if any)
 loadContent();
+initComments(autoSave);
 resetHistory();
 resumeRetypeIfActive();
+
+// Reconcile with the disk at the window's focus/blur edges: coming back picks
+// up changes other apps made to the file; leaving writes pending edits so
+// other apps never read a stale file. No timers, no polling.
+window.addEventListener('focus', checkExternalChanges);
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') checkExternalChanges();
+    else flushAutoSave();
+});
+window.addEventListener('blur', flushAutoSave);
+
+// Native shell pushes file-change events for the open file (the margin writing
+// comments back) — reconcile without waiting for a focus edge, so notes arrive
+// while you sit and read. Event-driven; the debounce is watcher hygiene.
+window.__thesisFileDidChange = debounce(() => checkExternalChanges(), 400);
+
+// Companion pass state, pushed by the shell. Surfaces only in the palette's
+// status row — presence you can check, never presence that interrupts.
+window.__thesisMarginState = (s) => {
+    state.marginActivity = s === 'reading' ? 'reading' : null;
+    if (state.commandModalOpen) renderStatusHeader();
+};
+
+// Keep the optional pill count honest whenever the margin changes
+document.addEventListener('thesis:comments-changed', () => {
+    if (state.wordCountVisible && state.commentCountInPill) debouncedWordCount();
+});
 // A reload mid-retype must not reconnect the old file — the fresh draft
 // would overwrite it on autosave
+// Files opened from Finder (native shim queues any that arrived before now)
+if (window.__thesisSetOpenHandler) window.__thesisSetOpenHandler(openExternalFile);
 if (!state.retypeActive) setTimeout(() => restoreFileHandle(), 50);
 
 // Show intro on first visit

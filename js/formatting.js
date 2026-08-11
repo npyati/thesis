@@ -65,6 +65,18 @@ function textNodesInRange(range) {
     return nodes;
 }
 
+// Clamp `range` to the inline content of a single .block-content. A boundary
+// that lands outside the block (the selection reaches in from a neighbouring
+// block, or is anchored on .block / #editor after Select-All) snaps to this
+// block's own edge. Returns null when nothing of the range falls inside `bc`.
+function rangeWithinBlock(range, bc) {
+    const sub = document.createRange();
+    sub.selectNodeContents(bc);
+    if (bc.contains(range.startContainer)) sub.setStart(range.startContainer, range.startOffset);
+    if (bc.contains(range.endContainer)) sub.setEnd(range.endContainer, range.endOffset);
+    return sub.collapsed ? null : sub;
+}
+
 export function applyFormatting(format) {
     const selection = window.getSelection();
     if (!selection.rangeCount || selection.isCollapsed) return;
@@ -83,55 +95,75 @@ export function applyFormatting(format) {
     const aliases = TAG_ALIASES[tag];
 
     const editor = document.getElementById('editor');
-    const nodes = textNodesInRange(range);
-    const fullyFormatted = nodes.length > 0 && nodes.every(n => formatElementFor(n, aliases));
 
-    if (fullyFormatted) {
-        // Remember the selection as character offsets in a stable ancestor —
-        // unwrapping moves nodes and normalize() merges them, which would
-        // otherwise collapse the selection to the end of the block
-        const anchorEl = range.commonAncestorContainer.nodeType === Node.TEXT_NODE
-            ? range.commonAncestorContainer.parentElement
-            : range.commonAncestorContainer;
-        const stableRoot = (anchorEl && anchorEl.closest('.block-content')) || editor;
-        const startChar = charOffsetIn(stableRoot, range.startContainer, range.startOffset);
-        const endChar = charOffsetIn(stableRoot, range.endContainer, range.endOffset);
+    // Formatting is inline — it must live INSIDE a .block-content, wrapping only
+    // text. Split a (possibly cross-block) selection into one range per block it
+    // touches, each clamped to that block. Wrapping the selection as one span
+    // would otherwise pull whole .block / .block-content divs into a <strong>,
+    // which the browser then lays out as its own broken block.
+    const targets = [];
+    editor.querySelectorAll('.block-content').forEach(bc => {
+        if (!range.intersectsNode(bc)) return;
+        const sub = rangeWithinBlock(range, bc);
+        if (sub) targets.push({ bc, sub });
+    });
+    if (targets.length === 0) return;
 
-        // Remove formatting: unwrap every format element the selection touches
-        // (a partially-selected run is unwrapped whole)
-        const els = [...new Set(nodes.map(n => formatElementFor(n, aliases)))];
-        els.forEach(unwrapElement);
-        // Normalize to merge adjacent text nodes
-        editor.normalize();
+    // Toggle direction is global: only strip formatting when every block's slice
+    // is already fully wrapped; otherwise apply it everywhere.
+    const fullyFormatted = targets.every(({ sub }) => {
+        const nodes = textNodesInRange(sub);
+        return nodes.length > 0 && nodes.every(n => formatElementFor(n, aliases));
+    });
 
-        // Restore the selection over the same characters
-        const [startNode, startOffset] = pointAtChar(stableRoot, startChar);
-        const [endNode, endOffset] = pointAtChar(stableRoot, endChar);
-        const restored = document.createRange();
-        restored.setStart(startNode, startOffset);
-        restored.setEnd(endNode, endOffset);
-        selection.removeAllRanges();
-        selection.addRange(restored);
-    } else {
-        // Apply formatting: wrap selection, stripping any same-format elements
-        // inside it first so repeated toggling can never nest tags
-        const wrapper = document.createElement(tag);
-        const fragment = range.extractContents();
-        fragment.querySelectorAll(aliases.join(',')).forEach(unwrapElement);
-        wrapper.appendChild(fragment);
-        range.insertNode(wrapper);
-        // Re-select the wrapped content
-        selection.removeAllRanges();
-        const newRange = document.createRange();
-        newRange.selectNodeContents(wrapper);
-        selection.addRange(newRange);
-    }
+    // Record each slice as character offsets within its own block-content so the
+    // selection survives the DOM surgery — formatting adds no text, so offsets
+    // stay valid even after extractContents()/normalize() move nodes around.
+    targets.forEach(t => {
+        t.startChar = charOffsetIn(t.bc, t.sub.startContainer, t.sub.startOffset);
+        t.endChar = charOffsetIn(t.bc, t.sub.endContainer, t.sub.endOffset);
+    });
+
+    targets.forEach(({ bc, sub }) => {
+        if (fullyFormatted) {
+            // Remove: unwrap every format element the slice touches (a
+            // partially-selected run is unwrapped whole)
+            const nodes = textNodesInRange(sub);
+            const els = [...new Set(nodes.map(n => formatElementFor(n, aliases)))].filter(Boolean);
+            els.forEach(unwrapElement);
+        } else {
+            // Apply: wrap the slice, stripping any same-format elements inside it
+            // first so repeated toggling can never nest tags
+            const wrapper = document.createElement(tag);
+            const fragment = sub.extractContents();
+            fragment.querySelectorAll(aliases.join(',')).forEach(unwrapElement);
+            wrapper.appendChild(fragment);
+            sub.insertNode(wrapper);
+        }
+        bc.normalize();
+    });
 
     // Sweep empty format shells — extractContents leaves one behind when a
     // selection starts or ends inside an existing format element
     editor.querySelectorAll('strong, b, em, i, strike, s, del').forEach(el => {
         if (el.textContent === '' && !el.querySelector('br')) el.remove();
     });
+
+    // Restore the selection over the same characters: first block's start to the
+    // last block's end. Works whether one block or many were touched.
+    const first = targets[0];
+    const last = targets[targets.length - 1];
+    const [startNode, startOffset] = pointAtChar(first.bc, first.startChar);
+    const [endNode, endOffset] = pointAtChar(last.bc, last.endChar);
+    try {
+        const restored = document.createRange();
+        restored.setStart(startNode, startOffset);
+        restored.setEnd(endNode, endOffset);
+        selection.removeAllRanges();
+        selection.addRange(restored);
+    } catch (e) {
+        // Best-effort — a failed restore just leaves the caret where it was
+    }
 
     editor.focus();
 }

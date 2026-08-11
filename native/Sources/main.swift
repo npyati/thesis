@@ -33,8 +33,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let bridge = NativeBridge()
     var titleObservation: NSKeyValueObservation?
 
+    // Files opened via Finder / `open` / drag-to-Dock-icon. They can arrive
+    // before the web app has loaded, so queue until the bridge reports ready.
+    private var pendingOpenFiles: [URL] = []
+    private var pageLoaded = false
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        let files = urls.filter { $0.isFileURL }
+        if pageLoaded {
+            files.forEach(sendOpenFile)
+        } else {
+            pendingOpenFiles.append(contentsOf: files)
+        }
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func sendOpenFile(_ url: URL) {
+        NSLog("thesis: opening %@", url.path)
+        guard let args = try? JSONSerialization.data(withJSONObject: [url.path, url.lastPathComponent]),
+              let json = String(data: args, encoding: .utf8) else { return }
+        webView.evaluateJavaScript("window.__thesisOpenPath.apply(null, \(json))", completionHandler: nil)
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMenu()
+
+        bridge.onPageLoaded = { [weak self] in
+            guard let self else { return }
+            self.pageLoaded = true
+            self.pendingOpenFiles.forEach(self.sendOpenFile)
+            self.pendingOpenFiles.removeAll()
+        }
 
         let config = WKWebViewConfiguration()
         let webRoot = Bundle.main.resourceURL!.appendingPathComponent("web", isDirectory: true)
@@ -88,6 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
+    func applicationWillTerminate(_ notification: Notification) { bridge.stopMarginProcess() }
 
     // Minimal menu bar: the Edit menu is what makes ⌘C/⌘V/⌘Z work inside the webview.
     private func buildMenu() {

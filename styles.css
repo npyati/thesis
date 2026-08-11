@@ -84,6 +84,10 @@ body.dark-mode .command-description {
     color: #999;
 }
 
+body.dark-mode .command-icon {
+    color: #888;
+}
+
 body.dark-mode #editor blockquote {
     border-left-color: #555;
     background-color: #2a2a2a;
@@ -462,11 +466,26 @@ body.dark-mode .command-group {
     font-weight: 600;
     font-size: 14px;
     margin-bottom: 4px;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+}
+
+/* Fixed-width slot so names line up across one- and two-character glyphs;
+   muted and unbolded so the column reads as icons, not text */
+.command-icon {
+    flex: none;
+    width: 22px;
+    text-align: center;
+    color: #999;
+    font-weight: 400;
+    font-size: 14.5px;
 }
 
 .command-description {
     font-size: 12px;
     color: #666;
+    margin-left: 30px; /* aligns under the name, past the icon column */
 }
 
 #word-count-display {
@@ -490,6 +509,10 @@ body.dark-mode .command-group {
 #word-count-display .separator {
     margin: 0 8px;
     color: #ccc;
+}
+
+#word-count-display .hidden {
+    display: none;
 }
 
 body.dark-mode #word-count-display {
@@ -1125,8 +1148,436 @@ body.dark-mode .heading-item.selected {
     font-weight: 600;
 }
 
+#intro-text a {
+    color: #4a90e2;
+    text-decoration: none;
+    cursor: pointer;
+    border-bottom: 1px solid rgba(74, 144, 226, 0.4);
+}
+
+#intro-text a:hover {
+    border-bottom-color: #4a90e2;
+}
+
+/* ──────────────────────────────────
+   Shortcuts & guide modal
+   ────────────────────────────────── */
+.guide-content {
+    max-width: 560px;
+    max-height: 82vh;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    outline: none;
+}
+
+.guide-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding: 22px 24px 14px;
+    border-bottom: 1px solid #eee;
+}
+
+.guide-header h3 {
+    margin: 0;
+}
+
+.guide-expand-toggle {
+    background: none;
+    border: none;
+    color: #4a90e2;
+    font-size: 13px;
+    cursor: pointer;
+    padding: 2px 4px;
+}
+
+.guide-expand-toggle:hover {
+    text-decoration: underline;
+}
+
+.guide-body {
+    overflow-y: auto;
+    padding: 6px 20px 8px;
+}
+
+.guide-section {
+    margin: 14px 0 6px;
+}
+
+.guide-section-title {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 600;
+    color: #999;
+    margin: 0 0 4px 8px;
+}
+
+.guide-row-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 7px 8px;
+    border-radius: 6px;
+}
+
+.guide-row.has-detail .guide-row-head {
+    cursor: pointer;
+}
+
+.guide-row.has-detail .guide-row-head:hover {
+    background: #f5f5f5;
+}
+
+.guide-row-head:focus-visible {
+    outline: 2px solid #4a90e2;
+    outline-offset: -2px;
+}
+
+.guide-keys {
+    flex: 0 0 118px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+}
+
+.guide-name {
+    flex: 1;
+    font-size: 14px;
+    color: #333;
+}
+
+.guide-chevron {
+    flex: 0 0 auto;
+    color: #bbb;
+    font-size: 16px;
+    line-height: 1;
+    transition: transform 0.18s ease;
+}
+
+.guide-row.expanded .guide-chevron {
+    transform: rotate(90deg);
+}
+
+.guide-detail {
+    max-height: 0;
+    overflow: hidden;
+    opacity: 0;
+    transition: max-height 0.22s ease, opacity 0.18s ease;
+}
+
+.guide-row.expanded .guide-detail {
+    max-height: 340px;
+    opacity: 1;
+}
+
+.guide-detail-inner {
+    padding: 0 8px 10px 130px;
+    font-size: 13.5px;
+    line-height: 1.6;
+    color: #555;
+}
+
+kbd.guide-key {
+    display: inline-block;
+    min-width: 12px;
+    padding: 2px 6px;
+    font-family: inherit;
+    font-size: 12px;
+    line-height: 1.4;
+    text-align: center;
+    color: #444;
+    background: #f4f4f4;
+    border: 1px solid #dcdcdc;
+    border-bottom-width: 2px;
+    border-radius: 5px;
+}
+
+.guide-plus {
+    color: #bbb;
+    font-size: 11px;
+}
+
+.guide-foot {
+    margin: 0;
+    padding: 12px 24px 18px;
+    font-size: 12px;
+    color: #999;
+    border-top: 1px solid #eee;
+}
+
+body.dark-mode .guide-header,
+body.dark-mode .guide-foot {
+    border-color: #444;
+}
+
+body.dark-mode .guide-section-title {
+    color: #888;
+}
+
+body.dark-mode .guide-name {
+    color: #e0e0e0;
+}
+
+body.dark-mode .guide-detail-inner {
+    color: #b0b0b0;
+}
+
+body.dark-mode .guide-row.has-detail .guide-row-head:hover {
+    background: #3a3a3a;
+}
+
+body.dark-mode kbd.guide-key {
+    background: #3d3d3d;
+    color: #ddd;
+    border-color: #555;
+}
+
 /* ====================
    Center Mode Styles
    ==================== */
 
 /* Center mode uses spacer divs instead of padding (added/removed via JavaScript) */
+/* ──────────────────────────────────
+   Margin comments
+   ────────────────────────────────── */
+mark.cmt {
+    background-color: rgba(255, 205, 105, 0.38);
+    border-bottom: 1.5px solid rgba(224, 159, 62, 0.75);
+    color: inherit;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+}
+
+mark.cmt.active {
+    background-color: rgba(255, 190, 70, 0.6);
+}
+
+mark.cmt.resolved {
+    background-color: rgba(160, 200, 160, 0.25);
+    border-bottom-color: rgba(120, 170, 120, 0.5);
+}
+
+mark.cmt.pending {
+    background-color: rgba(255, 205, 105, 0.25);
+    border-bottom: 1.5px dashed rgba(224, 159, 62, 0.75);
+}
+
+body.dark-mode mark.cmt { background-color: rgba(255, 190, 80, 0.24); border-bottom-color: rgba(255, 190, 80, 0.5); }
+body.dark-mode mark.cmt.active { background-color: rgba(255, 190, 80, 0.42); }
+body.dark-mode mark.cmt.resolved { background-color: rgba(140, 190, 140, 0.18); border-bottom-color: rgba(140, 190, 140, 0.4); }
+
+#comments-panel.hidden {
+    display: none;
+}
+
+#comments-empty.hidden {
+    display: none;
+}
+
+#comments-panel {
+    position: fixed;
+    top: 10vh;
+    bottom: 10vh;
+    right: 16px;
+    width: min(300px, 26vw);
+    display: flex;
+    flex-direction: column;
+    font-size: 13px;
+    z-index: 800; /* above editor, below modals/find-bar */
+}
+
+#comments-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 2px 6px;
+    color: #999;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    user-select: none;
+}
+
+#comments-head button {
+    border: none;
+    background: none;
+    font: inherit;
+    color: #bbb;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 30px;
+    padding: 0 10px;
+    border-radius: 6px;
+    text-transform: none;
+    letter-spacing: normal;
+    transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+#comments-head button:hover { color: #444; background: rgba(0, 0, 0, 0.06); }
+#comments-head button:active { background: rgba(0, 0, 0, 0.12); }
+#comments-head button.on { color: #333; background: rgba(0, 0, 0, 0.08); }
+
+#comments-head-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+/* Prev/next are icon buttons — square hit area, a legible arrow */
+#comments-prev, #comments-next {
+    font-size: 20px;
+    line-height: 1;
+    min-width: 30px;
+    padding: 0;
+}
+
+/* No scroll of its own — the card container inside is transform-synced to the
+   editor's scroll position (see syncCardScroll), and wheel events over the
+   panel are forwarded to the editor. */
+#comments-scroll {
+    flex: 1;
+    overflow: hidden;
+}
+
+#comments-cards { position: relative; }
+
+#comments-empty {
+    color: #aaa;
+    padding: 4px 2px;
+    font-style: italic;
+}
+
+.comment-card {
+    position: absolute;
+    left: 0;
+    right: 0;
+    box-sizing: border-box;
+    background: #fff;
+    border: 1px solid #e2e2e2;
+    border-radius: 6px;
+    padding: 8px 10px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+    transition: top 0.15s ease, border-color 0.15s ease;
+}
+
+.comment-card.active { border-color: #d9a44a; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1); }
+.comment-card.resolved { opacity: 0.65; }
+.comment-card.draft { border-style: dashed; }
+/* Another hand in the margin (Claude, or any non-"me" author): a quiet tint
+   on the card's edge so the margin reads as a conversation between two hands */
+.comment-card.foreign { border-left: 3px solid #8ba7c7; }
+.comment-reply.foreign { border-left-color: #8ba7c7; }
+
+/* Notes arriving from outside fade in instead of popping — presence, not
+   interruption. Only a `from` keyframe: each element settles on its own
+   natural opacity (resolved cards stay dimmed). `backwards` keeps staggered
+   arrivals invisible through their delay. */
+@keyframes margin-arrive {
+    from { opacity: 0; }
+}
+.comment-card.arriving,
+.comment-reply.arriving {
+    animation: margin-arrive 0.9s ease-out backwards;
+}
+/* The text highlight fades its tint in alongside its card — the prose itself
+   never changes opacity */
+@keyframes margin-arrive-mark {
+    from { background-color: transparent; border-bottom-color: transparent; }
+}
+mark.cmt.arriving {
+    animation: margin-arrive-mark 0.9s ease-out backwards;
+}
+
+.comment-quote {
+    font-style: italic;
+    color: #888;
+    border-left: 2px solid #e0b56b;
+    padding-left: 7px;
+    margin-bottom: 5px;
+    cursor: pointer;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.comment-meta { color: #b5b5b5; font-size: 11px; margin-bottom: 2px; }
+
+/* Document notes carry no quote — a quiet label says what they speak to */
+.comment-doc-label { color: #b5b5b5; font-size: 11px; font-style: italic; margin-bottom: 4px; }
+body.dark-mode .comment-doc-label { color: #777; }
+.comment-body { color: #333; white-space: pre-wrap; overflow-wrap: break-word; }
+.comment-orphan { color: #c0862c; font-size: 11px; margin-bottom: 3px; }
+
+.comment-reply { margin-top: 6px; padding-left: 8px; border-left: 2px solid #eee; }
+
+.comment-reply-box { display: none; margin-top: 6px; }
+.comment-reply-box.open { display: block; }
+
+.comment-card textarea {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 5px 7px;
+    font: inherit;
+    resize: vertical;
+    outline: none;
+    background: #fff;
+    color: #333;
+}
+.comment-card textarea:focus { border-color: #d9a44a; }
+
+.comment-actions { display: flex; gap: 12px; margin-top: 6px; justify-content: flex-end; }
+
+.comment-act {
+    border: none;
+    background: none;
+    font: inherit;
+    font-size: 11.5px;
+    color: #999;
+    cursor: pointer;
+    padding: 0;
+}
+
+.comment-act.icon {
+    font-size: 14px;
+    line-height: 1;
+}
+.comment-act:hover { color: #333; }
+.comment-act.danger:hover { color: #b3452e; }
+.comment-act.primary { color: #a4741f; font-weight: bold; }
+
+body.dark-mode #comments-head { color: #888; }
+body.dark-mode #comments-head button { color: #999; }
+body.dark-mode #comments-head button:hover { color: #eee; background: rgba(255, 255, 255, 0.09); }
+body.dark-mode #comments-head button:active { background: rgba(255, 255, 255, 0.16); }
+body.dark-mode #comments-head button.on { color: #eee; background: rgba(255, 255, 255, 0.12); }
+body.dark-mode #comments-empty { color: #777; }
+body.dark-mode .comment-card { background: #2d2d2d; border-color: #4a4a4a; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3); }
+body.dark-mode .comment-card.active { border-color: #c99b4e; }
+body.dark-mode .comment-card.foreign { border-left-color: #5d7a9a; }
+body.dark-mode .comment-reply.foreign { border-left-color: #5d7a9a; }
+body.dark-mode .comment-quote { color: #999; border-left-color: #a8853e; }
+body.dark-mode .comment-body { color: #ddd; }
+body.dark-mode .comment-meta { color: #777; }
+body.dark-mode .comment-reply { border-left-color: #444; }
+body.dark-mode .comment-card textarea { background: #3d3d3d; border-color: #555; color: #ddd; }
+body.dark-mode .comment-act { color: #888; }
+body.dark-mode .comment-act:hover { color: #ccc; }
+body.dark-mode .comment-act.primary { color: #d3a961; }
+
+/* On narrow screens the margin disappears — the file still carries the notes */
+@media (max-width: 980px) {
+    #comments-panel { display: none; }
+}
+
+@media print {
+    #comments-panel { display: none; }
+    mark.cmt { background: none; border-bottom: none; }
+}

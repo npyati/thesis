@@ -11,18 +11,32 @@ import {
     updatePageTitle, clearPageTitle,
     addCenterModeSpacers, centerCurrentBlock,
 } from './modes.js';
+import {
+    splitComments, getCommentBlock, setComments,
+    getMarginBlock, setMargin, noteArrivals,
+    syncAnchorsFromDOM, unwrapMarks, renderCommentUI,
+} from './comments.js';
 
 // ──────────────────────────────────
 // Auto-save with debouncing
 // ──────────────────────────────────
 export function saveContent() {
-    // Serialize without center-mode spacers so they never leak into stored content
+    // Comment highlights may have been edited along with the text — refresh the
+    // stored anchors from the live marks before persisting anything
+    syncAnchorsFromDOM();
+    // Serialize without center-mode spacers or comment marks so neither leaks
+    // into stored content — highlights are re-derived from anchors on load
     const clone = getEditor().cloneNode(true);
     clone.querySelectorAll('[data-spacer]').forEach(spacer => spacer.remove());
+    unwrapMarks(clone);
     try {
         const saveData = {
             content: clone.innerHTML,
             isEphemeral: state.currentDocumentIsEphemeral,
+            comments: state.comments,
+            commentsRaw: state.commentsRaw,
+            margin: state.margin,
+            marginRaw: state.marginRaw,
         };
         localStorage.setItem('editorContent', JSON.stringify(saveData));
     } catch (e) {
@@ -32,12 +46,24 @@ export function saveContent() {
 
 export function autoSave() {
     clearTimeout(state.saveTimeout);
+    state.autoSavePending = true;
     state.saveTimeout = setTimeout(async () => {
+        state.autoSavePending = false;
         saveContent();
         if (state.currentFileHandle) {
             await saveToFile();
         }
     }, 1000);
+}
+
+// Write any pending edits immediately — called when the window loses focus,
+// so another app never reads a file that's behind the editor
+export function flushAutoSave() {
+    if (!state.autoSavePending) return;
+    clearTimeout(state.saveTimeout);
+    state.autoSavePending = false;
+    saveContent();
+    if (state.currentFileHandle) saveToFile();
 }
 
 // ──────────────────────────────────
@@ -52,9 +78,17 @@ export function loadContent() {
             const parsed = JSON.parse(savedData);
             editor.innerHTML = sanitizeHTML(parsed.content);
             state.currentDocumentIsEphemeral = parsed.isEphemeral || false;
+            state.comments = Array.isArray(parsed.comments) ? parsed.comments : [];
+            state.commentsRaw = parsed.commentsRaw || null;
+            state.margin = parsed.margin || null;
+            state.marginRaw = parsed.marginRaw || null;
         } catch (e) {
             editor.innerHTML = sanitizeHTML(savedData);
             state.currentDocumentIsEphemeral = false;
+            state.comments = [];
+            state.commentsRaw = null;
+            state.margin = null;
+            state.marginRaw = null;
         }
 
         if (editor.children.length === 0) {
@@ -132,14 +166,189 @@ export function setSaveStatus(status) { // 'synced' | 'saving' | 'detached' | 'h
 // ──────────────────────────────────
 // File operations
 // ──────────────────────────────────
+// External-change tracking. No timers: the window's focus/blur edges and each
+// save are the sync points where thesis reconciles with the disk.
+let lastDiskText = null;    // file content as last read from / written to disk
+let lastSerialized = null;  // this document's serialization at that same moment
+let conflictOpen = false;
+let refreshInFlight = false;
+
+function rememberFileState(disk, serialized) {
+    lastDiskText = disk;
+    lastSerialized = serialized;
+}
+
+async function readDisk() {
+    const file = await state.currentFileHandle.getFile();
+    return await file.text();
+}
+
+// ── The margin companion (native shell only) ──
+// The shell hosts the reader: whenever the open file is invited, a companion
+// process is attached to it; whenever it isn't, there is none. Called after
+// every event that can change that truth — load, save-as, invite/revoke,
+// external margin-block change, close, detach.
+export function syncMarginProcess() {
+    if (!window.__thesisStartMargin) return;   // web build — companion runs by hand
+    const h = state.currentFileHandle;
+    const invited = !!(state.margin && state.margin.invited) && !state.marginRaw;
+    if (h && h.isNativePath && invited && !state.currentDocumentIsEphemeral) {
+        window.__thesisStartMargin(h.path, localStorage.getItem('marginModel') || '');
+    } else {
+        window.__thesisStopMargin();
+    }
+}
+
+// ── Comment-only external changes ──
+// The margin companion (and any other tool that speaks the format) write comments while thesis may
+// hold unsaved prose edits. When the disk change left the prose alone, merge
+// the comment blocks in place — no reload, no dialog, the caret never moves.
+
+// One comment merged three ways: base = as last seen on disk, ext = disk now,
+// local = the editor. External wins where it moved relative to base; local
+// wins otherwise (its anchors are the live truth).
+function mergeComment(base, ext, local) {
+    const merged = { ...local };
+    const rKey = (r) => `${r.author}|${r.created}|${r.body}`;
+    const seen = new Set((local.replies || []).map(rKey));
+    merged.replies = [...(local.replies || [])];
+    for (const r of (ext.replies || [])) {
+        if (!seen.has(rKey(r))) { merged.replies.push(r); seen.add(rKey(r)); }
+    }
+    merged.replies.sort((a, b) => String(a.created).localeCompare(String(b.created)));
+    if (!base || ext.resolved !== base.resolved) merged.resolved = ext.resolved;
+    if (!base || ext.body !== base.body) merged.body = ext.body;
+    if (ext.fix && !local.fix) merged.fix = ext.fix;
+    return merged;
+}
+
+function tryAdoptExternalComments(diskText) {
+    if (lastDiskText === null) return false;
+    const base = splitComments(lastDiskText);
+    const ext = splitComments(diskText);
+    // Only safe when parsing is clean on all sides and the prose is untouched
+    if (ext.raw || base.raw || state.commentsRaw) return false;
+    if (ext.prose !== base.prose) return false;
+
+    syncAnchorsFromDOM();
+    const localById = new Map((state.comments || []).map(c => [c.id, c]));
+    const baseById = new Map((base.comments || []).map(c => [c.id, c]));
+    let arrivals = 0;
+    const arrivedCards = [];
+    const arrivedReplies = [];
+    const rKey = (r) => `${r.author}|${r.created}|${r.body}`;
+    const merged = [];
+    for (const e of (ext.comments || [])) {
+        const l = localById.get(e.id);
+        if (l) {
+            const m = mergeComment(baseById.get(e.id), e, l);
+            const had = new Set((l.replies || []).map(rKey));
+            for (const r of (m.replies || [])) {
+                if (r.author && r.author !== 'me' && !had.has(rKey(r))) {
+                    arrivals++;
+                    arrivedReplies.push(`${m.id}|${r.author}|${r.created}`);
+                }
+            }
+            merged.push(m);
+            localById.delete(e.id);
+        } else if (!baseById.has(e.id)) {
+            merged.push(e);   // new external comment
+            if (e.author && e.author !== 'me') { arrivals++; arrivedCards.push(e.id); }
+        }
+        // else: the writer deleted it locally since base — it stays deleted
+    }
+    // Comments only the editor has: new local (unsaved yet) — keep them.
+    for (const c of (state.comments || [])) {
+        if (localById.has(c.id)) merged.push(c);
+    }
+    state.comments = merged;
+    // An externally edited margin block (brief, invitation) rides along
+    if (JSON.stringify(ext.margin || null) !== JSON.stringify(base.margin || null)) {
+        setMargin(ext.margin, ext.marginRaw);
+        syncMarginProcess();
+    }
+    if (arrivals > 0) state.newClaudeArrivals += arrivals;
+    noteArrivals(arrivedCards, arrivedReplies);
+    lastDiskText = diskText;
+    renderCommentUI();
+    saveContent();
+    return true;
+}
+
+// Both sides changed — never pick silently. OK loads the disk version;
+// Cancel keeps the editor's version and overwrites the file.
+async function resolveConflict(diskText) {
+    if (conflictOpen) return;
+    conflictOpen = true;
+    const useDisk = await showConfirm(
+        'This file was changed by another app while you had unsaved edits here. ' +
+        'OK loads the file’s version (your unsaved edits are discarded); ' +
+        'Cancel keeps your version and overwrites the file.'
+    );
+    conflictOpen = false;
+    if (useDisk) {
+        await loadFileIntoEditor(state.currentFileHandle, state.currentFileName);
+        resetHistory();
+    } else {
+        lastDiskText = diskText;   // treat the disk state as seen, then overwrite it
+        await saveToFile();
+    }
+}
+
+// Re-read the connected file if another app changed it. Reloads silently when
+// the editor has nothing unsaved; asks when both sides changed.
+export async function checkExternalChanges() {
+    if (!state.currentFileHandle || refreshInFlight || conflictOpen) return;
+    refreshInFlight = true;
+    try {
+        const disk = await readDisk();
+        if (lastDiskText === null || disk === lastDiskText) return;
+        if (tryAdoptExternalComments(disk)) return;
+        if (serializeDocument() === lastSerialized) {
+            const editor = getEditor();
+            const scroll = editor.scrollTop;
+            await loadFileIntoEditor(state.currentFileHandle, state.currentFileName);
+            resetHistory();
+            editor.scrollTop = scroll;
+        } else {
+            await resolveConflict(disk);
+        }
+    } catch (error) {
+        console.error('External change check failed:', error);
+    } finally {
+        refreshInFlight = false;
+    }
+}
+
+// Manual refresh (the "Reload File" command)
+export async function reloadFromFile() {
+    if (!state.currentFileHandle) {
+        await showAlert('Not connected to a file — open one first.');
+        return;
+    }
+    flushAutoSave();               // capture in-flight local edits first
+    await checkExternalChanges();  // then reload or resolve, as needed
+}
+
 export async function saveToFile() {
     if (!state.currentFileHandle) return false;
     try {
+        // Another app may have written the file since we last touched it —
+        // never blind-overwrite outside changes (comment replies, agent edits).
+        // A comment-only change merges in and the save proceeds with it.
+        if (lastDiskText !== null) {
+            const disk = await readDisk();
+            if (disk !== lastDiskText && !tryAdoptExternalComments(disk)) {
+                resolveConflict(disk);
+                return false;
+            }
+        }
         setSaveStatus('saving');
-        const markdown = blocksToMarkdown();
+        const markdown = serializeDocument();
         const writable = await state.currentFileHandle.createWritable();
         await writable.write(markdown);
         await writable.close();
+        rememberFileState(markdown, markdown);
         setSaveStatus('synced');
         return true;
     } catch (error) {
@@ -147,6 +356,9 @@ export async function saveToFile() {
         if (error.name === 'NotAllowedError') {
             state.currentFileHandle = null;
             state.currentFileName = null;
+            rememberFileState(null, null);
+            if (window.__thesisUnwatchFile) window.__thesisUnwatchFile();
+            syncMarginProcess();
             clearPageTitle();
             setSaveStatus('detached');
             showAlert('The connection to your file was lost (permission revoked). Your draft is still autosaved in the browser — use Save to reattach it to a file.');
@@ -171,10 +383,11 @@ export async function saveToNewFile() {
                 suggestedName: state.currentFileName || 'document.md'
             });
 
-            const markdown = blocksToMarkdown();
+            const markdown = serializeDocument();
             const writable = await fileHandle.createWritable();
             await writable.write(markdown);
             await writable.close();
+            rememberFileState(markdown, markdown);
 
             const file = await fileHandle.getFile();
             state.currentFileHandle = fileHandle;
@@ -184,6 +397,8 @@ export async function saveToNewFile() {
             updatePageTitle(file.name);
             setSaveStatus('synced');
             markSavedPermanent();
+            if (window.__thesisWatchFile && fileHandle.isNativePath) window.__thesisWatchFile(fileHandle.path);
+            syncMarginProcess();
         } else {
             exportAsMarkdown();
         }
@@ -203,15 +418,26 @@ export async function quickSave() {
 async function loadFileIntoEditor(fileHandle, fileName = null) {
     const file = await fileHandle.getFile();
     const markdownContent = await file.text();
-    const blocks = markdownToBlocks(markdownContent);
+    // Lift the thesis comment and margin blocks out before parsing — comments
+    // render as margin notes, never as prose
+    const { prose, comments, raw, margin, marginRaw } = splitComments(markdownContent);
+    const blocks = markdownToBlocks(prose);
 
     const editor = getEditor();
     editor.innerHTML = '';
     blocks.forEach(block => editor.appendChild(block));
     updateNumberedBlocks();
+    setComments(comments, raw);
+    setMargin(margin, marginRaw);
+    renderCommentUI();
 
     state.currentFileHandle = fileHandle;
     state.currentFileName = fileName || file.name;
+    // Native shell: watch the file so outside changes (the margin writing
+    // comments) arrive while the window stays focused — event-driven, no polling
+    if (window.__thesisWatchFile && fileHandle.isNativePath) window.__thesisWatchFile(fileHandle.path);
+    syncMarginProcess();
+    rememberFileState(markdownContent, serializeDocument());
     state.currentDocumentIsEphemeral = false;
     updatePageTitle(state.currentFileName);
     setSaveStatus('synced');
@@ -247,6 +473,19 @@ export async function importFromMarkdown() {
     }
 }
 
+// A file handed to us from outside — Finder double-click via the native shim.
+// Same flow as Open File, minus the picker.
+export async function openExternalFile(fileHandle) {
+    state.externalFileOpened = true;   // startup restore must not race/override this
+    try {
+        await loadFileIntoEditor(fileHandle);
+        await saveFileHandleToDB(fileHandle, state.currentFileName);
+    } catch (error) {
+        console.error('Error opening external file:', error);
+        await showAlert(`Couldn't open "${fileHandle.name || 'file'}".`);
+    }
+}
+
 export async function clearAll() {
     const confirmed = await showConfirm('Start a new document?');
     if (confirmed) {
@@ -255,6 +494,12 @@ export async function clearAll() {
         state.currentDocumentIsEphemeral = false;
         state.currentFileHandle = null;
         state.currentFileName = null;
+        rememberFileState(null, null);
+        if (window.__thesisUnwatchFile) window.__thesisUnwatchFile();
+        setComments([]);
+        setMargin(null);
+        syncMarginProcess();
+        renderCommentUI();
         await clearFileHandleFromDB();
         clearPageTitle();
         setSaveStatus('hidden');
@@ -284,11 +529,14 @@ export async function clearStorage() {
 // File handle restoration on page load
 // ──────────────────────────────────
 export async function restoreFileHandle() {
+    if (state.externalFileOpened) return;
     const savedFile = await loadFileHandleFromDB();
     if (!savedFile || !savedFile.handle) return;
 
     try {
         const permission = await savedFile.handle.queryPermission({ mode: 'readwrite' });
+        // Re-check: a Finder-opened file may have landed during the awaits above
+        if (state.externalFileOpened) return;
         if (permission === 'granted') {
             await loadFileIntoEditor(savedFile.handle, savedFile.fileName);
         } else if (permission === 'denied') {
@@ -345,6 +593,13 @@ function deferPermissionRequest(savedFile) {
 // ──────────────────────────────────
 export function blocksToMarkdown() {
     return htmlToMarkdown(getEditor().innerHTML);
+}
+
+// Full document for file writes: prose plus the thesis comment and margin
+// blocks (if any). Clipboard copies and Word export stay prose-only.
+export function serializeDocument() {
+    syncAnchorsFromDOM();
+    return blocksToMarkdown() + getCommentBlock() + getMarginBlock();
 }
 
 // Serialize element content to markdown, preserving inline formatting
@@ -454,7 +709,7 @@ export function processInlineFormatting(text) {
 // Export functions
 // ──────────────────────────────────
 export function exportAsMarkdown() {
-    const markdown = blocksToMarkdown();
+    const markdown = serializeDocument();
     downloadBlob(new Blob([markdown], { type: 'text/markdown' }), generateTimestampedFilename('md'));
 }
 

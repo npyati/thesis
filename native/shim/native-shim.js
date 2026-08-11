@@ -57,6 +57,22 @@
         return [new NativeFileHandle(res.path, res.name)];
     };
 
+    // Files opened from Finder: the host calls __thesisOpenPath; the web app
+    // registers its loader via __thesisSetOpenHandler once its modules are up.
+    // Anything arriving in between waits here.
+    let openHandler = null;
+    const pendingOpens = [];
+    window.__thesisOpenPath = (path, name) => {
+        call('log', { message: 'openPath ' + path });
+        const handle = new NativeFileHandle(path, name);
+        if (openHandler) openHandler(handle);
+        else pendingOpens.push(handle);
+    };
+    window.__thesisSetOpenHandler = (fn) => {
+        openHandler = fn;
+        pendingOpens.splice(0).forEach(fn);
+    };
+
     // Custom-scheme pages may not be secure contexts, which hides navigator.clipboard
     if (!navigator.clipboard) {
         try {
@@ -84,6 +100,21 @@
     // Installed fonts: the sandboxed webview can't see ~/Library/Fonts, so the
     // host serves them as @font-face rules (/__fonts.css) and lists families here.
     window.__thesisInstalledFonts = () => call('listFonts').then((res) => (res && res.families) || []);
+
+    // Live file watching: the app registers the open file; the host pushes
+    // window.__thesisFileDidChange(path) on outside writes (app.js defines it).
+    window.__thesisWatchFile = (path) => { call('watchFile', { path: path }).catch(() => {}); };
+    window.__thesisUnwatchFile = () => { call('unwatchFile').catch(() => {}); };
+
+    // The margin companion, hosted by the shell: started when the open file is
+    // invited, stopped on revoke/close/quit. Self-contained — no terminal.
+    window.__thesisStartMargin = (path, model) => { call('startMargin', { path: path, model: model || '' }).catch(() => {}); };
+    window.__thesisStopMargin = () => { call('stopMargin').catch(() => {}); };
+
+    // Fullscreen: element fullscreen (requestFullscreen) desyncs WKWebView's
+    // layout viewport on exit — the window stops reflowing on resize. Route the
+    // app's toggle to real macOS window fullscreen instead.
+    window.__thesisToggleFullscreen = () => { call('toggleFullscreen'); };
 
     window.addEventListener('DOMContentLoaded', () => {
         const link = document.createElement('link');
