@@ -1960,6 +1960,22 @@ editor.addEventListener('input', (event) => {
         }
     }
 
+    // Em dash trigger (--)
+    if (event.inputType === 'insertText' && event.data === '-' && sel.rangeCount > 0) {
+        const range = sel.getRangeAt(0);
+        const node = range.startContainer;
+        if (node.nodeType === Node.TEXT_NODE) {
+            const text = node.textContent;
+            const cp = range.startOffset;
+            if (cp >= 2 && text.substring(cp - 2, cp) === '--') {
+                node.textContent = text.substring(0, cp - 2) + '—' + text.substring(cp);
+                const r = document.createRange();
+                r.setStart(node, cp - 1); r.collapse(true);
+                sel.removeAllRanges(); sel.addRange(r);
+            }
+        }
+    }
+
     // Clean up browser-inserted <p> tags
     editor.querySelectorAll(':scope > p').forEach(p => {
         const content = p.innerHTML;
@@ -2071,7 +2087,8 @@ editor.addEventListener('paste', (event) => {
             const blocks = markdownToBlocks(text);
             const cb = getCurrentBlock();
             if (cb && blocks.length > 0) {
-                blocks.forEach(b => cb.parentNode.insertBefore(b, cb.nextSibling));
+                const anchor = cb.nextSibling;
+                blocks.forEach(b => cb.parentNode.insertBefore(b, anchor));
                 updateNumberedBlocks();
                 focusBlock(blocks[blocks.length - 1], true);
                 autoSave();
@@ -2100,7 +2117,8 @@ editor.addEventListener('paste', (event) => {
         const blocks = parsed.map(b => createBlockElement(b.type, b.html, b.level));
         const cb = getCurrentBlock();
         if (cb && blocks.length > 0) {
-            blocks.forEach(b => cb.parentNode.insertBefore(b, cb.nextSibling));
+            const anchor = cb.nextSibling;
+            blocks.forEach(b => cb.parentNode.insertBefore(b, anchor));
             updateNumberedBlocks(); focusBlock(blocks[blocks.length - 1], true);
             autoSave();
         }
