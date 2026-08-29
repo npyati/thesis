@@ -2,7 +2,7 @@
 
 import state from './state.js';
 import { debounce, readJSON, restoreSelection } from './utils.js';
-import { getEditor, getCurrentBlock, getSelectedBlocks, createBlockElement, updateNumberedBlocks, focusBlock, revealCaret, normalizeBlocks } from './blocks.js';
+import { getEditor, getCurrentBlock, getSelectedBlocks, createBlockElement, appendBlockToEditor, updateNumberedBlocks, focusBlock, revealCaret, normalizeBlocks } from './blocks.js';
 import { openModal, closeModal, closeOnClickOutside, attachModalKeyboardNav, showAlert, showConfirm } from './modals.js';
 import { applyFormatting, strikethroughLastWord, deleteAllStrikethrough } from './formatting.js';
 import {
@@ -94,6 +94,13 @@ function increaseColumnWidth() { state.currentColumnWidth = Math.min(state.curre
 function decreaseColumnWidth() { state.currentColumnWidth = Math.max(state.currentColumnWidth - 50, 400); applyColumnWidth(); }
 function applyColumnWidth() { document.documentElement.style.setProperty('--column-width', state.currentColumnWidth + 'px'); localStorage.setItem('editorColumnWidth', state.currentColumnWidth); positionCards(); }
 function loadColumnWidth() { const w = localStorage.getItem('editorColumnWidth'); if (w) { state.currentColumnWidth = parseInt(w); document.documentElement.style.setProperty('--column-width', state.currentColumnWidth + 'px'); } }
+
+function toggleParagraphSpacing() {
+    state.paragraphSpacing = !state.paragraphSpacing;
+    document.body.classList.toggle('paragraph-spacing', state.paragraphSpacing);
+    localStorage.setItem('paragraphSpacing', state.paragraphSpacing);
+    positionCards();
+}
 
 // ──────────────────────────────────
 // Word count (debounced)
@@ -671,7 +678,7 @@ function deleteBlocks() {
     if (first.previousElementSibling && first.previousElementSibling.classList.contains('block')) focusTarget = first.previousElementSibling;
     else { const last = blocksToDelete[blocksToDelete.length - 1]; if (last.nextElementSibling && last.nextElementSibling.classList.contains('block')) focusTarget = last.nextElementSibling; }
     blocksToDelete.forEach(b => b.remove());
-    if (editor.querySelectorAll('.block').length === 0) { const nb = createBlockElement('text', ''); editor.appendChild(nb); focusTarget = nb; }
+    if (editor.querySelectorAll('.block').length === 0) { const nb = createBlockElement('text', ''); appendBlockToEditor(nb); focusTarget = nb; }
     updateNumberedBlocks(); state.multiBlockSelection = [];
     if (focusTarget) focusBlock(focusTarget, false);
     autoSave();
@@ -685,19 +692,19 @@ function moveBlocks(direction) {
     else { const sel = getSelectedBlocks(); blocks = sel.length > 1 ? sel : [getCurrentBlock()]; }
     if (!blocks[0]) return;
 
+    // Only a .block sibling counts as room to move — at the document's edges
+    // the neighbor is a center-mode spacer, and swapping past it strands the
+    // block a full viewport outside the text
     if (direction < 0) {
-        if (!blocks[0].previousElementSibling) return;
         const target = blocks[0].previousElementSibling;
+        if (!target || !target.classList.contains('block')) return;
         for (let i = 0; i < blocks.length; i++) editor.insertBefore(blocks[i], target);
     } else {
         const last = blocks[blocks.length - 1];
-        if (!last.nextElementSibling) return;
         const nextBlock = last.nextElementSibling;
+        if (!nextBlock || !nextBlock.classList.contains('block')) return;
         const targetPos = nextBlock.nextElementSibling;
-        for (let i = blocks.length - 1; i >= 0; i--) {
-            if (targetPos) editor.insertBefore(blocks[i], targetPos);
-            else editor.appendChild(blocks[i]);
-        }
+        for (let i = blocks.length - 1; i >= 0; i--) editor.insertBefore(blocks[i], targetPos);
     }
     updateNumberedBlocks(); autoSave();
     if (blocks.length === 1) focusBlock(blocks[0]);
@@ -746,6 +753,7 @@ const guide = [
         { keys: ['⌘', '−'], name: 'Smaller text' },
         { keys: ['⌘', ']'], name: 'More line spacing' },
         { keys: ['⌘', '['], name: 'Less line spacing' },
+        { name: 'Paragraph spacing', detail: 'Adds a blank line of visual space between paragraphs without changing the document itself. Toggle it from the command menu.' },
         { keys: ['⌘', '⇧', ']'], name: 'Wider column' },
         { keys: ['⌘', '⇧', '['], name: 'Narrower column' },
         { keys: ['F11'], name: 'Fullscreen' },
@@ -910,6 +918,7 @@ const commands = [
     { icon: 'A−', name: 'Decrease Font Size', description: 'Make text smaller (Ctrl/Cmd + -)', action: decreaseFontSize, category: 'View' },
     { icon: '↕︎', name: 'Increase Line Height', description: 'Make text more spacious (Ctrl/Cmd + ])', action: increaseLineHeight, category: 'View' },
     { icon: '↕︎', name: 'Decrease Line Height', description: 'Make text more compact (Ctrl/Cmd + [)', action: decreaseLineHeight, category: 'View' },
+    { icon: '¶', name: 'Toggle Paragraph Spacing', description: 'Add a blank line of visual space between paragraphs — the text itself is unchanged', action: toggleParagraphSpacing, category: 'View' },
     { icon: '↔︎', name: 'Widen Text Column', description: 'Make the text column wider (Ctrl/Cmd + Shift + ])', action: increaseColumnWidth, category: 'View' },
     { icon: '↔︎', name: 'Narrow Text Column', description: 'Make the text column narrower (Ctrl/Cmd + Shift + [)', action: decreaseColumnWidth, category: 'View' },
 
@@ -1662,8 +1671,13 @@ editor.addEventListener('keydown', (event) => {
         if (rects.length > 0) {
             const cr = rects[0];
             const lh = parseInt(window.getComputedStyle(ce).lineHeight) || 20;
-            const tr = document.caretRangeFromPoint(cr.left, cr.top - lh);
-            if (tr && ce.contains(tr.startContainer)) { event.preventDefault(); sel.removeAllRanges(); sel.addRange(tr); return; }
+            // Probe only while the point stays inside this block: in the wider
+            // paragraph-spacing gap the hit test snaps back to the caret's own
+            // line, and the caret would stall instead of crossing blocks.
+            if (cr.top - lh >= ce.getBoundingClientRect().top) {
+                const tr = document.caretRangeFromPoint(cr.left, cr.top - lh);
+                if (tr && ce.contains(tr.startContainer)) { event.preventDefault(); sel.removeAllRanges(); sel.addRange(tr); return; }
+            }
         }
         // Siblings may be non-blocks (center-mode spacers) — only focus real blocks
         let prev = cb.previousElementSibling;
@@ -1685,8 +1699,12 @@ editor.addEventListener('keydown', (event) => {
         if (rects.length > 0) {
             const cr = rects[0];
             const lh = parseInt(window.getComputedStyle(ce).lineHeight) || 20;
-            const tr = document.caretRangeFromPoint(cr.left, cr.bottom + lh);
-            if (tr && ce.contains(tr.startContainer)) { event.preventDefault(); sel.removeAllRanges(); sel.addRange(tr); return; }
+            // Same guard as ArrowUp: don't let the probe land in the
+            // inter-block gap and snap back to the caret's own line
+            if (cr.bottom + lh <= ce.getBoundingClientRect().bottom) {
+                const tr = document.caretRangeFromPoint(cr.left, cr.bottom + lh);
+                if (tr && ce.contains(tr.startContainer)) { event.preventDefault(); sel.removeAllRanges(); sel.addRange(tr); return; }
+            }
         }
         // Siblings may be non-blocks (center-mode spacers) — only focus real blocks
         let next = cb.nextElementSibling;
@@ -1893,7 +1911,7 @@ editor.addEventListener('beforeinput', (event) => {
     }
     if (!inside) {
         let fb = editor.querySelector('.block');
-        if (!fb) { fb = createBlockElement('text', ''); editor.appendChild(fb); }
+        if (!fb) { fb = createBlockElement('text', ''); appendBlockToEditor(fb); }
         // Move the caret synchronously (focusBlock's rAF is too late) and let inserts
         // proceed there so the first keystroke isn't swallowed; deletes stay blocked
         const bc = fb.querySelector('.block-content');
@@ -1983,8 +2001,14 @@ editor.addEventListener('input', (event) => {
         else p.remove();
     });
 
-    // Ensure center mode spacers
-    if (state.centerMode && !document.getElementById('center-mode-top-spacer')) addCenterModeSpacers();
+    // Ensure center mode spacers exist and still bracket the text — native
+    // editing surgery can leave a block stranded outside them, where it renders
+    // a viewport away from the document and can never be centered
+    if (state.centerMode) {
+        const top = document.getElementById('center-mode-top-spacer');
+        const bottom = document.getElementById('center-mode-bottom-spacer');
+        if (top !== editor.firstElementChild || bottom !== editor.lastElementChild) addCenterModeSpacers();
+    }
 
     // Debounced word count
     if (state.wordCountVisible) debouncedWordCount();
@@ -2130,7 +2154,7 @@ editor.addEventListener('paste', (event) => {
 editor.addEventListener('click', (event) => {
     if (state.forwardOnlyMode || state.blindMode) { event.preventDefault(); return; }
     if (editor.querySelectorAll('.block').length === 0) {
-        const fb = createBlockElement('text', ''); editor.appendChild(fb); focusBlock(fb);
+        const fb = createBlockElement('text', ''); appendBlockToEditor(fb); focusBlock(fb);
     }
     updateFocusParagraph(); centerCurrentBlock();
 });
@@ -2315,6 +2339,7 @@ document.getElementById('markdown-file-input').addEventListener('change', (event
         const blocks = markdownToBlocks(prose);
         editor.innerHTML = '';
         blocks.forEach(b => editor.appendChild(b));
+        if (state.centerMode) addCenterModeSpacers();
         updateNumberedBlocks();
         setComments(comments, raw);
         renderCommentUI();
@@ -2372,6 +2397,7 @@ if (localStorage.getItem('canvasMode') === 'true') document.body.classList.add('
 if (localStorage.getItem('forwardOnlyMode') === 'true') { state.forwardOnlyMode = true; document.body.classList.add('forward-only-mode'); }
 if (localStorage.getItem('centerMode') === 'true') { state.centerMode = true; document.body.classList.add('center-mode'); }
 if (localStorage.getItem('focusMode') === 'true') { state.focusMode = true; document.body.classList.add('focus-mode'); }
+if (localStorage.getItem('paragraphSpacing') === 'true') { state.paragraphSpacing = true; document.body.classList.add('paragraph-spacing'); }
 const savedLimit = localStorage.getItem('ephemeralWordLimit');
 if (savedLimit) { const p = parseInt(savedLimit, 10); if (!isNaN(p) && p > 0) state.EPHEMERAL_WORD_LIMIT = p; }
 if (localStorage.getItem('wordCountVisible') === 'true') { state.wordCountVisible = true; document.getElementById('word-count-display').classList.remove('hidden'); }
@@ -2426,7 +2452,7 @@ if (!localStorage.getItem('hasSeenIntro')) {
 // Fallback: ensure at least one block exists
 setTimeout(() => {
     if (editor.children.length === 0 || !editor.querySelector('.block')) {
-        const fb = createBlockElement('text', ''); editor.appendChild(fb); focusBlock(fb);
+        const fb = createBlockElement('text', ''); appendBlockToEditor(fb); focusBlock(fb);
     }
 }, 100);
 

@@ -14,6 +14,7 @@ const state = {
     currentFontSize: 18,
     currentLineHeight: 1.6,
     currentColumnWidth: 700,
+    paragraphSpacing: false,
     forwardOnlyMode: false,
     centerMode: false,
     focusMode: false,

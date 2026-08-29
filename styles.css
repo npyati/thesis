@@ -166,6 +166,21 @@ body.dark-mode #editor blockquote {
     margin-top: 0.25em;
 }
 
+/* Paragraph spacing (toggle): a blank line's worth of air between blocks,
+   purely visual — no empty line exists in the document. 1lh tracks the
+   line-height setting; the em value is a fallback for engines without lh
+   (1.6 mirrors the default line-height). */
+body.paragraph-spacing .block + .block {
+    margin-top: 2.1em;
+    margin-top: calc(0.5em + 1lh);
+}
+
+/* Consecutive list items keep their tight rhythm — the air is between paragraphs */
+body.paragraph-spacing .block-bullet + .block-bullet,
+body.paragraph-spacing .block-numbered + .block-numbered {
+    margin-top: 0.25em;
+}
+
 /* Heading block styles */
 .block-heading1 .block-content {
     font-size: 2em;

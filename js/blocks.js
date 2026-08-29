@@ -157,6 +157,13 @@ export function createBlockElement(type = 'text', content = '', level = 0) {
     return block;
 }
 
+// Append a block at the end of the text. In center mode the editor's last
+// child is the bottom spacer, and a block appended after it renders a full
+// viewport below the document and can never be scrolled up to center.
+export function appendBlockToEditor(block) {
+    getEditor().insertBefore(block, document.getElementById('center-mode-bottom-spacer'));
+}
+
 // Update all numbered block markers with hierarchical numbering
 export function updateNumberedBlocks() {
     const allBlocks = Array.from(getEditor().querySelectorAll('.block'));
