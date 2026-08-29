@@ -29,21 +29,13 @@ The sync works in both directions: if another app changes the connected file —
 
 ## Running it
 
-Plain HTML, CSS, and JavaScript — no build step, no dependencies. Serve the folder with any static server:
-
-```sh
-python3 -m http.server
-```
-
-then open `http://localhost:8000`. (A server is needed because the editor uses ES modules; opening `index.html` straight from disk won't work.) In a supporting browser it also installs as a standalone app.
-
-## Mac app
-
-[native/](native/) holds a small Swift wrapper that runs thesis in a frameless window of its own — real save dialogs, the Mac's installed fonts, no browser anywhere. See [native/README.md](native/README.md) for details.
+thesis is a Mac app: [native/](native/) holds a small Swift shell that runs the editor in a frameless window of its own — real save dialogs, the Mac's installed fonts, no browser anywhere. See [native/README.md](native/README.md) for details.
 
 ```sh
 cd native && ./build.sh && open build/thesis.app
 ```
+
+The editor itself is plain HTML, CSS, and JavaScript — no build step, no dependencies — so for development it also runs in a browser: serve the folder with any static server (`python3 -m http.server`) and open `http://localhost:8000`. (A server is needed because the editor uses ES modules.)
 
 ---
 

@@ -11,9 +11,8 @@ CONTENTS="$APP/Contents"
 rm -rf "$BUILD"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources/web"
 
-# ── web assets (sw.js deliberately excluded — no service worker in native) ──
-cp "$WEB_SRC/index.html" "$WEB_SRC/styles.css" "$WEB_SRC/favicon.ico" "$WEB_SRC/manifest.json" "$CONTENTS/Resources/web/"
-[ -f "$WEB_SRC/apple-touch-icon.png" ] && cp "$WEB_SRC/apple-touch-icon.png" "$CONTENTS/Resources/web/"
+# ── web assets ──
+cp "$WEB_SRC/index.html" "$WEB_SRC/styles.css" "$WEB_SRC/favicon.ico" "$CONTENTS/Resources/web/"
 cp -R "$WEB_SRC/js" "$CONTENTS/Resources/web/js"
 
 # ── native shim ──
@@ -23,9 +22,8 @@ cp shim/native-shim.js "$CONTENTS/Resources/"
 mkdir -p "$CONTENTS/Resources/margin"
 cp "$WEB_SRC/margin/margin.js" "$WEB_SRC/margin/PROTOCOL.md" "$WEB_SRC/margin/README.md" "$CONTENTS/Resources/margin/"
 
-# ── app icon: AppIcon-1024.png (margined, Dock-style) if present, else the PWA icon ──
+# ── app icon ──
 ICON_SRC="AppIcon-1024.png"
-[ -f "$ICON_SRC" ] || ICON_SRC="$WEB_SRC/android-chrome-512x512.png"
 if [ -f "$ICON_SRC" ]; then
     ICONSET="$BUILD/AppIcon.iconset"
     mkdir -p "$ICONSET"

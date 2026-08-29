@@ -714,7 +714,7 @@ function moveBlocks(direction) {
 // ──────────────────────────────────
 // Intro
 // ──────────────────────────────────
-const introHTML = `<p><strong>thesis</strong> is a minimalist text editor, designed for focus and creativity.</p><p>It works through the keyboard — you shouldn't need the mouse. Type <strong>/</strong> to open the command menu, then search or use the arrow keys and press <strong>[enter]</strong>. Type <strong>/</strong> again to close it (press <strong>[space]</strong> at the empty prompt to keep a literal /).</p><p>Your writing saves automatically as you type — you never need to reach for Save. It's kept in this browser, and you can also <em>Open File</em> or <em>Save to File As…</em> to sync a real <strong>.md</strong> file on your computer. Nothing is ever sent online.</p><p>There are a few different ways to write, all in the / menu:</p><ul><li><strong>Stages</strong> — Draft, Revise, and Polish set the editor up for each phase of writing.</li><li><strong>Forward-only</strong> — type like a typewriter, with no going back.</li><li><strong>Blind</strong> — write without seeing anything; a running word count keeps you company.</li><li><strong>Ephemeral</strong> — the oldest words fade away as new ones arrive, leaving no record.</li><li><strong>Retype</strong> — redraft by retyping your old draft one paragraph at a time.</li><li><strong>Focus</strong> — fade or blur everything but the line you're on, or keep it centered.</li></ul><p>There's more to find — fonts, dark mode, find, margin comments (select text, <strong>⌘⌥M</strong>), export to Markdown or Word — but that's enough to start. There isn't much here, just what's necessary.</p><p>For every shortcut and a note on each way of writing, open <a href="#" id="intro-guide-link"><strong>Shortcuts &amp; Guide</strong></a> — or press <strong>/</strong> and search for it.</p><p><strong>This is a work in progress.</strong> Send me a note if you have ideas.</p>`;
+const introHTML = `<p><strong>thesis</strong> is a minimalist text editor, designed for focus and creativity.</p><p>It works through the keyboard — you shouldn't need the mouse. Type <strong>/</strong> to open the command menu, then search or use the arrow keys and press <strong>[enter]</strong>. Type <strong>/</strong> again to close it (press <strong>[space]</strong> at the empty prompt to keep a literal /).</p><p>Your writing saves automatically as you type — you never need to reach for Save. It's kept on this machine, and you can also <em>Open File</em> or <em>Save to File As…</em> to sync a real <strong>.md</strong> file on disk. Nothing is ever sent online.</p><p>There are a few different ways to write, all in the / menu:</p><ul><li><strong>Stages</strong> — Draft, Revise, and Polish set the editor up for each phase of writing.</li><li><strong>Forward-only</strong> — type like a typewriter, with no going back.</li><li><strong>Blind</strong> — write without seeing anything; a running word count keeps you company.</li><li><strong>Ephemeral</strong> — the oldest words fade away as new ones arrive, leaving no record.</li><li><strong>Retype</strong> — redraft by retyping your old draft one paragraph at a time.</li><li><strong>Focus</strong> — fade or blur everything but the line you're on, or keep it centered.</li></ul><p>There's more to find — fonts, dark mode, find, margin comments (select text, <strong>⌘⌥M</strong>), export to Markdown or Word — but that's enough to start. There isn't much here, just what's necessary.</p><p>For every shortcut and a note on each way of writing, open <a href="#" id="intro-guide-link"><strong>Shortcuts &amp; Guide</strong></a> — or press <strong>/</strong> and search for it.</p><p><strong>This is a work in progress.</strong> Send me a note if you have ideas.</p>`;
 
 function showIntro() {
     document.getElementById('intro-text').innerHTML = introHTML;
@@ -1222,11 +1222,9 @@ function showCommandModal(anchorRect) {
             const modalWidth = 350;
             const modalHeight = commandModal.offsetHeight || 200;
             if (left + modalWidth > window.innerWidth) left = window.innerWidth - modalWidth - 10;
-            const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
-            if (top + modalHeight > vh) top = rect.top - modalHeight - 5;
+            if (top + modalHeight > window.innerHeight) top = rect.top - modalHeight - 5;
             left = Math.max(10, left);
             top = Math.max(10, top);
-            if (window.innerWidth < 768 && top > vh - 100) top = Math.max(10, vh - modalHeight - 20);
 
             commandModal.style.left = `${left}px`;
             commandModal.style.top = `${top}px`;
@@ -2350,43 +2348,6 @@ document.getElementById('markdown-file-input').addEventListener('change', (event
     reader.readAsText(file);
 });
 
-// Mobile tap handler
-function handleMobileCanvasTap(event) {
-    if (window.innerWidth >= 768) return;
-    const target = event.target || (event.changedTouches && event.changedTouches[0]?.target);
-    if (!target) return;
-    if (target.classList?.contains('block-content') || target.closest('.block-content')) return;
-    if (!commandModal.classList.contains('hidden') || !introModal.classList.contains('hidden')) return;
-
-    state.commandModalOpen = true;
-    commandModal.classList.remove('hidden');
-    commandSearch.value = '';
-    filterCommands('');
-    state.selectedCommandIndex = 0;
-
-    setTimeout(() => {
-        const mw = 350;
-        const left = Math.max(10, (window.innerWidth - mw) / 2);
-        const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
-        commandModal.style.left = `${left}px`;
-        commandModal.style.top = `${Math.max(10, Math.min(60, vh * 0.1))}px`;
-        commandSearch.blur();
-    }, 0);
-}
-editor.addEventListener('click', handleMobileCanvasTap);
-editor.addEventListener('touchend', handleMobileCanvasTap);
-
-if (window.visualViewport) {
-    window.visualViewport.addEventListener('resize', () => {
-        if (!commandModal.classList.contains('hidden')) {
-            const vh = window.visualViewport.height;
-            const mh = commandModal.offsetHeight || 200;
-            let top = parseInt(commandModal.style.top) || 10;
-            if (top + mh > vh) commandModal.style.top = `${Math.max(10, vh - mh - 20)}px`;
-        }
-    });
-}
-
 // ──────────────────────────────────
 // Initialization
 // ──────────────────────────────────
@@ -2468,11 +2429,3 @@ if (window.__thesisInstalledFonts) {
     window.__thesisInstalledFonts().then(fonts => { state.installedFonts = fonts; }).catch(() => {});
 }
 
-// Register service worker
-if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('./sw.js')
-        .then(() => console.log('Service worker registered'))
-        .catch((err) => console.log('Service worker registration failed:', err));
-}
-
-document.addEventListener('fullscreenchange', () => {});

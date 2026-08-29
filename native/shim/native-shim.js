@@ -83,20 +83,6 @@
         } catch (e) { /* leave it */ }
     }
 
-    // Report standalone display-mode so the Install App command says "already installed"
-    const origMatchMedia = window.matchMedia.bind(window);
-    window.matchMedia = (query) => {
-        if (query && query.indexOf('display-mode: standalone') !== -1) {
-            return {
-                matches: true, media: query, onchange: null,
-                addEventListener() {}, removeEventListener() {},
-                addListener() {}, removeListener() {},
-                dispatchEvent() { return false; },
-            };
-        }
-        return origMatchMedia(query);
-    };
-
     // Installed fonts: the sandboxed webview can't see ~/Library/Fonts, so the
     // host serves them as @font-face rules (/__fonts.css) and lists families here.
     window.__thesisInstalledFonts = () => call('listFonts').then((res) => (res && res.families) || []);
