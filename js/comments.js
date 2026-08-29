@@ -45,6 +45,8 @@ function newId() {
 
 // ──────────────────────────────────
 // Storage format (the thesis:comments v1 block)
+// margin/margin.js carries its own copy of this parser; any change here must
+// keep the two in agreement — `node margin/format-test.js` checks that.
 // ──────────────────────────────────
 
 // Lift the thesis:margin block (Claude's per-file invitation + brief) out of

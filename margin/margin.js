@@ -48,7 +48,7 @@ for (let i = 0; i < argv.length; i++) {
     else if (a === '--attach') opts.attach = path.resolve(argv[++i]);
     else if (!a.startsWith('-')) opts.root = path.resolve(a);
 }
-if (!opts.root && !opts.once && !opts.attach) {
+if (require.main === module && !opts.root && !opts.once && !opts.attach) {
     console.error('usage: node margin.js <folder> [--threshold 100] [--model m] [--verbose] [--dry-run] [--no-lookups]');
     console.error('       node margin.js --once <file.md>');
     console.error('       node margin.js --attach <file.md>');
@@ -750,10 +750,16 @@ function attach(file) {
 // ──────────────────────────────────
 // Go
 // ──────────────────────────────────
-if (opts.once) {
-    consider(opts.once, true).then(() => process.exit(0));
-} else if (opts.attach) {
-    attach(opts.attach);
-} else {
-    watch(opts.root);
+// Exported for format-test.js, which asserts this file and thesis's
+// js/comments.js still speak the same thesis format.
+module.exports = { splitMargin, splitComments, serializeFile, renderBlocks, changedWordCount, threadsNeedingAnswer };
+
+if (require.main === module) {
+    if (opts.once) {
+        consider(opts.once, true).then(() => process.exit(0));
+    } else if (opts.attach) {
+        attach(opts.attach);
+    } else {
+        watch(opts.root);
+    }
 }
