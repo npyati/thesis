@@ -169,7 +169,7 @@ export function applyFormatting(format) {
 }
 
 // Strikethrough the last word before cursor
-export function strikethroughLastWord(savedCursorOffset = null) {
+export function strikethroughLastWord() {
     const selection = window.getSelection();
     if (!selection.rangeCount) return;
 
@@ -181,10 +181,8 @@ export function strikethroughLastWord(savedCursorOffset = null) {
 
     const fullText = contentEl.textContent;
     const range = selection.getRangeAt(0);
-    let cursorOffset = savedCursorOffset;
-
-    if (cursorOffset === null) {
-        cursorOffset = 0;
+    let cursorOffset = 0;
+    {
         const walker = document.createTreeWalker(contentEl, NodeFilter.SHOW_TEXT, null, false);
         let currentNode;
         let found = false;

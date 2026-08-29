@@ -6,9 +6,10 @@ const ALLOWED_TAGS = new Set([
     'h1', 'h2', 'h3', 'ul', 'ol', 'li', 'blockquote',
 ]);
 
+// Saved content never carries ids, styles, or spacers (marks and spacers are
+// stripped before every persist) — anything wearing them is not ours.
 const ALLOWED_ATTRS = new Set([
-    'class', 'contenteditable', 'data-type', 'data-level', 'data-spacer',
-    'id', 'style',
+    'class', 'contenteditable', 'data-type', 'data-level',
 ]);
 
 // Attributes that are always stripped (event handlers, dangerous)
@@ -39,14 +40,6 @@ function sanitizeNode(node) {
             for (const attr of attrs) {
                 if (DANGEROUS_ATTR_PREFIX.test(attr.name) || !ALLOWED_ATTRS.has(attr.name)) {
                     child.removeAttribute(attr.name);
-                }
-            }
-
-            // Strip dangerous CSS in style attribute
-            if (child.hasAttribute('style')) {
-                const style = child.getAttribute('style');
-                if (/expression|url\s*\(|javascript:/i.test(style)) {
-                    child.removeAttribute('style');
                 }
             }
 

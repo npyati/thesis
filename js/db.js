@@ -24,54 +24,6 @@ function initDB() {
     });
 }
 
-export async function saveFileHandleToDB(handle, fileName) {
-    try {
-        const db = await initDB();
-        const transaction = db.transaction(STORE_NAME, 'readwrite');
-        const store = transaction.objectStore(STORE_NAME);
-        await store.put({ handle, fileName }, 'currentFile');
-    } catch (error) {
-        console.error('Error saving file handle:', error);
-    }
-}
-
-export async function loadFileHandleFromDB() {
-    try {
-        const db = await initDB();
-        const transaction = db.transaction(STORE_NAME, 'readonly');
-        const store = transaction.objectStore(STORE_NAME);
-        return new Promise((resolve, reject) => {
-            const request = store.get('currentFile');
-            request.onsuccess = () => {
-                const result = request.result;
-                if (result && result.handle) result.handle = reviveHandle(result.handle);
-                resolve(result);
-            };
-            request.onerror = () => reject(request.error);
-        });
-    } catch (error) {
-        console.error('Error loading file handle:', error);
-        return null;
-    }
-}
-
-export async function clearFileHandleFromDB() {
-    try {
-        const db = await initDB();
-        const transaction = db.transaction(STORE_NAME, 'readwrite');
-        const store = transaction.objectStore(STORE_NAME);
-        await store.delete('currentFile');
-    } catch (error) {
-        console.error('Error clearing file handle:', error);
-    }
-}
-
-// ──────────────────────────────────
-// Recent files — a short list of {handle, fileName, timestamp}
-// ──────────────────────────────────
-const RECENT_KEY = 'recentFiles';
-const MAX_RECENT = 8;
-
 function getFromStore(key) {
     return initDB().then(db => new Promise((resolve, reject) => {
         const request = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).get(key);
@@ -88,6 +40,48 @@ function putInStore(value, key) {
         transaction.onerror = () => reject(transaction.error);
     }));
 }
+
+function deleteFromStore(key) {
+    return initDB().then(db => new Promise((resolve, reject) => {
+        const transaction = db.transaction(STORE_NAME, 'readwrite');
+        transaction.objectStore(STORE_NAME).delete(key);
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+    }));
+}
+
+export async function saveFileHandleToDB(handle, fileName) {
+    try {
+        await putInStore({ handle, fileName }, 'currentFile');
+    } catch (error) {
+        console.error('Error saving file handle:', error);
+    }
+}
+
+export async function loadFileHandleFromDB() {
+    try {
+        const result = await getFromStore('currentFile');
+        if (result && result.handle) result.handle = reviveHandle(result.handle);
+        return result;
+    } catch (error) {
+        console.error('Error loading file handle:', error);
+        return null;
+    }
+}
+
+export async function clearFileHandleFromDB() {
+    try {
+        await deleteFromStore('currentFile');
+    } catch (error) {
+        console.error('Error clearing file handle:', error);
+    }
+}
+
+// ──────────────────────────────────
+// Recent files — a short list of {handle, fileName, timestamp}
+// ──────────────────────────────────
+const RECENT_KEY = 'recentFiles';
+const MAX_RECENT = 8;
 
 export async function getRecentFiles() {
     try {

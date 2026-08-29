@@ -55,7 +55,7 @@ export function closeModal(modalEl) {
 }
 
 // Attach "close on click outside" to an overlay modal
-export function closeOnClickOutside(modalEl, contentSelector = '.modal-content') {
+export function closeOnClickOutside(modalEl) {
     modalEl.addEventListener('click', (event) => {
         if (event.target === modalEl) {
             closeModal(modalEl);
@@ -98,6 +98,65 @@ export function attachModalKeyboardNav(searchInput, modalEl, {
             event.preventDefault();
             closeModal(modalEl);
         }
+    });
+}
+
+// Promise-based text-input dialog. Resolves to the entered string, or null on
+// cancel. Enter confirms (⌘Enter when multiline, so plain Enter can wrap).
+export function showPrompt(title, { value = '', placeholder = '', multiline = false, okText = 'Save' } = {}) {
+    return new Promise((resolve) => {
+        const dialogModal = document.getElementById('dialog-modal');
+        const dialogMessage = document.getElementById('dialog-message');
+        const dialogConfirmButton = document.getElementById('dialog-confirm-button');
+        const dialogCancelButton = document.getElementById('dialog-cancel-button');
+
+        dialogMessage.innerHTML = '';
+        const titleEl = document.createElement('div');
+        titleEl.textContent = title;
+        dialogMessage.appendChild(titleEl);
+
+        const input = document.createElement(multiline ? 'textarea' : 'input');
+        if (multiline) input.rows = 4; else input.type = 'text';
+        input.className = 'dialog-input';
+        input.value = value;
+        input.placeholder = placeholder;
+        input.setAttribute('autocomplete', 'off');
+        dialogMessage.appendChild(input);
+
+        dialogConfirmButton.textContent = okText;
+        dialogCancelButton.textContent = 'Cancel';
+        dialogCancelButton.style.display = 'inline-block';
+
+        const finish = (result) => {
+            dialogModal.classList.add('hidden');
+            cleanup();
+            getEditor().focus();
+            resolve(result);
+        };
+        const handleConfirm = () => finish(input.value);
+        const handleCancel = () => finish(null);
+        const handleKeydown = (event) => {
+            event.stopPropagation();   // '/', shortcuts, etc. must not reach the editor
+            const confirmKey = multiline ? (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) : event.key === 'Enter';
+            if (confirmKey) { event.preventDefault(); handleConfirm(); }
+            else if (event.key === 'Escape') { event.preventDefault(); handleCancel(); }
+        };
+        const cleanup = () => {
+            dialogConfirmButton.removeEventListener('click', handleConfirm);
+            dialogCancelButton.removeEventListener('click', handleCancel);
+            input.removeEventListener('keydown', handleKeydown);
+        };
+
+        dialogConfirmButton.addEventListener('click', handleConfirm);
+        dialogCancelButton.addEventListener('click', handleCancel);
+        input.addEventListener('keydown', handleKeydown);
+
+        dialogModal.classList.remove('hidden');
+        setTimeout(() => {
+            input.focus();
+            if (multiline) input.setSelectionRange(input.value.length, input.value.length);
+            else input.select();
+        }, 50);
     });
 }
 

@@ -534,14 +534,6 @@ body.canvas-mode #editor {
     height: 100%;
 }
 
-/* Typewriter mode - disable text selection */
-body.typewriter-mode #editor {
-    user-select: none;
-    -webkit-user-select: none;
-    -moz-user-select: none;
-    -ms-user-select: none;
-}
-
 /* Find bar */
 #find-bar {
     position: fixed;
@@ -952,7 +944,7 @@ body.dark-mode .modal-content h3 {
 body.dark-mode #font-search,
 body.dark-mode #heading-search,
 body.dark-mode #recent-search,
-body.dark-mode #ephemeral-limit-input {
+body.dark-mode .dialog-input {
     background: #3d3d3d;
     color: #e0e0e0;
     border-color: #555;
@@ -1119,6 +1111,22 @@ body.dark-mode .heading-item.selected {
     line-height: 1.5;
     padding: 8px 0 0 0;
     font-size: 16px;
+}
+
+/* Text input in prompt dialogs (ephemeral limit, Claude brief) */
+.dialog-input {
+    width: 100%;
+    margin-top: 14px;
+    padding: 12px 14px;
+    font-size: 14px;
+    font-family: inherit;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    outline: none;
+    box-sizing: border-box;
+    background: #fff;
+    color: inherit;
+    resize: vertical;
 }
 
 #intro-text {

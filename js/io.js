@@ -1,7 +1,7 @@
 // File I/O, autosave persistence, markdown conversion, import/export
 
 import state from './state.js';
-import { getEditor, createBlockElement, updateNumberedBlocks, focusBlock } from './blocks.js';
+import { getEditor, createBlockElement, updateNumberedBlocks, focusBlock, normalizeBlocks } from './blocks.js';
 import { saveFileHandleToDB, loadFileHandleFromDB, clearFileHandleFromDB, addRecentFile, removeRecentFile } from './db.js';
 import { generateTimestampedFilename } from './utils.js';
 import { sanitizeHTML } from './sanitize.js';
@@ -102,43 +102,9 @@ export function loadContent() {
             return;
         }
 
-        // Normalize loaded blocks
-        const blocks = Array.from(editor.querySelectorAll('.block'));
-        blocks.forEach(block => {
-            const markers = block.querySelectorAll('.block-marker');
-            markers.forEach(marker => { marker.contentEditable = 'false'; });
-
-            let contentEl = block.querySelector('.block-content');
-            if (!contentEl) {
-                contentEl = document.createElement('div');
-                contentEl.className = 'block-content';
-                contentEl.contentEditable = 'true';
-                Array.from(block.childNodes).forEach(child => {
-                    if (!child.classList || !child.classList.contains('block-marker')) {
-                        contentEl.appendChild(child.cloneNode(true));
-                    }
-                });
-                const marker = block.querySelector('.block-marker');
-                block.innerHTML = '';
-                if (marker) block.appendChild(marker);
-                block.appendChild(contentEl);
-            }
-
-            contentEl.contentEditable = 'true';
-            if (!block.dataset.level) block.dataset.level = '0';
-            if (contentEl.childNodes.length === 0 || contentEl.innerHTML.trim() === '') {
-                contentEl.innerHTML = '<br>';
-            }
-        });
-
-        // Clean up loose nodes
-        Array.from(editor.childNodes).forEach(node => {
-            if (node.nodeType === Node.TEXT_NODE && node.textContent.trim() !== '') {
-                node.remove();
-            } else if (node.nodeType === Node.ELEMENT_NODE && !node.classList.contains('block')) {
-                node.remove();
-            }
-        });
+        // Repair any malformed structure in the loaded HTML — same invariant,
+        // same fixer, as the per-input repair
+        normalizeBlocks();
 
         updateNumberedBlocks();
         const firstBlock = editor.querySelector('.block');

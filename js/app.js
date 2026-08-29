@@ -3,7 +3,7 @@
 import state from './state.js';
 import { debounce, readJSON, restoreSelection } from './utils.js';
 import { getEditor, getCurrentBlock, getSelectedBlocks, createBlockElement, appendBlockToEditor, updateNumberedBlocks, focusBlock, revealCaret, normalizeBlocks } from './blocks.js';
-import { openModal, closeModal, closeOnClickOutside, attachModalKeyboardNav, showAlert, showConfirm } from './modals.js';
+import { openModal, closeModal, closeOnClickOutside, attachModalKeyboardNav, showAlert, showConfirm, showPrompt } from './modals.js';
 import { applyFormatting, strikethroughLastWord, deleteAllStrikethrough } from './formatting.js';
 import {
     toggleForwardOnlyMode, toggleCenterMode, toggleFocusMode, toggleDarkMode,
@@ -393,81 +393,19 @@ function doRedo() {
 // Ephemeral word limit change
 // ──────────────────────────────────
 async function changeEphemeralWordLimit() {
-    // BUG FIX: use separate local savedSelection (not shadowing global)
-    const localSavedSelection = state.savedSelection;
-    const commandModal = document.getElementById('command-modal');
-    commandModal.classList.add('hidden');
-
-    return new Promise((resolve) => {
-        const dialogModal = document.getElementById('dialog-modal');
-        const dialogMessage = document.getElementById('dialog-message');
-        const dialogConfirmButton = document.getElementById('dialog-confirm-button');
-        const dialogCancelButton = document.getElementById('dialog-cancel-button');
-
-        const inputWrapper = document.createElement('div');
-        inputWrapper.style.marginTop = '15px';
-        const input = document.createElement('input');
-        input.type = 'text';
-        input.id = 'ephemeral-limit-input';
-        input.value = state.EPHEMERAL_WORD_LIMIT;
-        input.placeholder = 'Enter word limit...';
-        input.setAttribute('autocomplete', 'off');
-        input.style.cssText = 'width:100%;padding:14px 16px;font-size:15px;border:1px solid #ddd;border-radius:6px;outline:none;box-sizing:border-box;background:#fff;';
-        inputWrapper.appendChild(input);
-
-        dialogMessage.innerHTML = '';
-        const title = document.createElement('div');
-        title.textContent = 'Change Ephemeral Word Limit';
-        title.style.marginBottom = '10px';
-        dialogMessage.appendChild(title);
-        dialogMessage.appendChild(inputWrapper);
-        dialogConfirmButton.textContent = 'Save';
-        dialogCancelButton.style.display = 'inline-block';
-
-        const restoreCursor = () => {
-            if (localSavedSelection) {
-                try { const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(localSavedSelection); }
-                catch (e) { editor.focus(); }
-            }
-        };
-
-        const handleConfirm = async () => {
-            const parsedLimit = parseInt(input.value.trim(), 10);
-            if (isNaN(parsedLimit) || parsedLimit < 1) {
-                dialogModal.classList.add('hidden'); cleanup(); restoreCursor();
-                await showAlert('Please enter a valid number greater than 0.');
-                resolve(); return;
-            }
-            state.EPHEMERAL_WORD_LIMIT = parsedLimit;
-            localStorage.setItem('ephemeralWordLimit', parsedLimit);
-            if (state.currentDocumentIsEphemeral) updateWordCount();
-            dialogModal.classList.add('hidden'); cleanup(); restoreCursor();
-            await showAlert(`Ephemeral word limit changed to ${parsedLimit} words.`);
-            resolve();
-        };
-
-        const handleCancel = () => { dialogModal.classList.add('hidden'); cleanup(); restoreCursor(); resolve(); };
-
-        const handleKeydown = (event) => {
-            if (event.key === 'Enter') { event.preventDefault(); handleConfirm(); }
-            else if (event.key === 'Escape') { event.preventDefault(); handleCancel(); }
-        };
-
-        const cleanup = () => {
-            dialogConfirmButton.removeEventListener('click', handleConfirm);
-            dialogCancelButton.removeEventListener('click', handleCancel);
-            input.removeEventListener('keydown', handleKeydown);
-        };
-
-        dialogConfirmButton.addEventListener('click', handleConfirm);
-        dialogCancelButton.addEventListener('click', handleCancel);
-        input.addEventListener('keydown', handleKeydown);
-
-        setTimeout(() => {
-            dialogModal.classList.remove('hidden');
-            setTimeout(() => { input.focus(); input.select(); }, 50);
-        }, 100);
+    const entered = await showPrompt('Ephemeral word limit', {
+        value: String(state.EPHEMERAL_WORD_LIMIT),
+        placeholder: 'How many words linger before fading',
     });
+    if (entered === null) return;
+    const parsed = parseInt(entered.trim(), 10);
+    if (isNaN(parsed) || parsed < 1) {
+        await showAlert('Please enter a valid number greater than 0.');
+        return;
+    }
+    state.EPHEMERAL_WORD_LIMIT = parsed;
+    localStorage.setItem('ephemeralWordLimit', parsed);
+    if (state.currentDocumentIsEphemeral) updateWordCount();
 }
 
 // ──────────────────────────────────
@@ -543,63 +481,18 @@ async function editClaudeBrief() {
         await showAlert('This file has a damaged margin block that thesis is preserving untouched — repair it before editing the brief.');
         return;
     }
-    const commandModal = document.getElementById('command-modal');
-    commandModal.classList.add('hidden');
-
-    return new Promise((resolve) => {
-        const dialogModal = document.getElementById('dialog-modal');
-        const dialogMessage = document.getElementById('dialog-message');
-        const dialogConfirmButton = document.getElementById('dialog-confirm-button');
-        const dialogCancelButton = document.getElementById('dialog-cancel-button');
-
-        const ta = document.createElement('textarea');
-        ta.rows = 4;
-        ta.value = (state.margin && state.margin.brief) || '';
-        ta.placeholder = 'How should Claude read this file? e.g. "Challenge my logic, leave my style alone."';
-        ta.setAttribute('autocomplete', 'off');
-        ta.style.cssText = 'width:100%;margin-top:15px;padding:14px 16px;font-size:14px;font-family:inherit;border:1px solid #ddd;border-radius:6px;outline:none;box-sizing:border-box;background:#fff;resize:vertical;';
-
-        dialogMessage.innerHTML = '';
-        const title = document.createElement('div');
-        title.textContent = 'Claude’s brief for this file';
-        dialogMessage.appendChild(title);
-        dialogMessage.appendChild(ta);
-        dialogConfirmButton.textContent = 'Save';
-        dialogCancelButton.style.display = 'inline-block';
-
-        const cleanup = () => {
-            dialogConfirmButton.removeEventListener('click', handleConfirm);
-            dialogCancelButton.removeEventListener('click', handleCancel);
-            ta.removeEventListener('keydown', handleKeydown);
-            dialogModal.classList.add('hidden');
-            editor.focus();
-        };
-        const handleConfirm = () => {
-            const brief = ta.value.trim();
-            const margin = { ...(state.margin || { invited: false }) };
-            if (brief) margin.brief = brief;
-            else delete margin.brief;
-            state.margin = margin;
-            autoSave();
-            cleanup();
-            resolve();
-        };
-        const handleCancel = () => { cleanup(); resolve(); };
-        const handleKeydown = (event) => {
-            event.stopPropagation();
-            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); handleConfirm(); }
-            else if (event.key === 'Escape') { event.preventDefault(); handleCancel(); }
-        };
-
-        dialogConfirmButton.addEventListener('click', handleConfirm);
-        dialogCancelButton.addEventListener('click', handleCancel);
-        ta.addEventListener('keydown', handleKeydown);
-
-        setTimeout(() => {
-            dialogModal.classList.remove('hidden');
-            setTimeout(() => { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }, 50);
-        }, 100);
+    const entered = await showPrompt('Claude’s brief for this file', {
+        value: (state.margin && state.margin.brief) || '',
+        placeholder: 'How should Claude read this file? e.g. "Challenge my logic, leave my style alone."',
+        multiline: true,
     });
+    if (entered === null) return;
+    const brief = entered.trim();
+    const margin = { ...(state.margin || { invited: false }) };
+    if (brief) margin.brief = brief;
+    else delete margin.brief;
+    state.margin = margin;
+    autoSave();
 }
 
 // ──────────────────────────────────
@@ -1393,7 +1286,6 @@ editor.addEventListener('keydown', (event) => {
                     const bc = currentBlock.querySelector('.block-content');
                     if ((range.startOffset === 0 || event.key === 'Home') && bc) {
                         event.preventDefault();
-                        // BUG FIX: use retry approach for cursor restoration
                         const restoreCursor = () => {
                             const r = document.createRange();
                             if (bc.firstChild) r.setStart(bc.firstChild, 0);
