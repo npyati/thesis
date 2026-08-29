@@ -241,15 +241,16 @@ function tryAdoptExternalComments(diskText) {
     return true;
 }
 
-// Both sides changed — never pick silently. OK loads the disk version;
-// Cancel keeps the editor's version and overwrites the file.
+// Both sides changed — never pick silently, and give the choice real labels:
+// this is the one dialog in the app where a misread button loses writing.
 async function resolveConflict(diskText) {
     if (conflictOpen) return;
     conflictOpen = true;
     const useDisk = await showConfirm(
-        'This file was changed by another app while you had unsaved edits here. ' +
-        'OK loads the file’s version (your unsaved edits are discarded); ' +
-        'Cancel keeps your version and overwrites the file.'
+        'This file was changed by another app while you also have unsaved edits here. ' +
+        'Which version should win? Loading the file’s version discards your unsaved ' +
+        'edits; keeping yours overwrites the file.',
+        { okText: 'Load file’s version', cancelText: 'Keep mine' }
     );
     conflictOpen = false;
     if (useDisk) {
@@ -825,6 +826,34 @@ function createZipBlob(files) {
 // ──────────────────────────────────
 // DOCX XML generators
 // ──────────────────────────────────
+function escapeXml(text) {
+    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+}
+
+// One <w:r> per formatting context, so bold/italic/strike survive the export
+// the same way inlineMarkdown carries them into .md
+function docxRuns(node, fmt = { b: false, i: false, s: false }) {
+    let xml = '';
+    node.childNodes.forEach(child => {
+        if (child.nodeType === Node.TEXT_NODE) {
+            if (!child.textContent) return;
+            const props = (fmt.b ? '<w:b/>' : '') + (fmt.i ? '<w:i/>' : '') + (fmt.s ? '<w:strike/>' : '');
+            const rPr = props ? `<w:rPr>${props}</w:rPr>` : '';
+            xml += `<w:r>${rPr}<w:t xml:space="preserve">${escapeXml(child.textContent)}</w:t></w:r>`;
+            return;
+        }
+        if (child.nodeType !== Node.ELEMENT_NODE) return;
+        const tag = child.tagName;
+        if (tag === 'BR') { xml += '<w:r><w:br/></w:r>'; return; }
+        xml += docxRuns(child, {
+            b: fmt.b || tag === 'STRONG' || tag === 'B',
+            i: fmt.i || tag === 'EM' || tag === 'I',
+            s: fmt.s || tag === 'STRIKE' || tag === 'S' || tag === 'DEL',
+        });
+    });
+    return xml;
+}
+
 function generateDocxXml(blocks) {
     let xml = '';
     let numberedCounters = {};
@@ -837,21 +866,21 @@ function generateDocxXml(blocks) {
 
         if (!content && type === 'text') { numberedCounters = {}; xml += '<w:p><w:pPr></w:pPr></w:p>'; return; }
 
-        const escaped = content.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+        const runs = contentEl ? docxRuns(contentEl) : '';
         const indentLeft = level * 720;
 
         switch (type) {
-            case 'heading1': numberedCounters = {}; xml += `<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>${escaped}</w:t></w:r></w:p>`; break;
-            case 'heading2': numberedCounters = {}; xml += `<w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t>${escaped}</w:t></w:r></w:p>`; break;
-            case 'heading3': numberedCounters = {}; xml += `<w:p><w:pPr><w:pStyle w:val="Heading3"/></w:pPr><w:r><w:t>${escaped}</w:t></w:r></w:p>`; break;
-            case 'bullet': numberedCounters = {}; xml += `<w:p><w:pPr><w:pStyle w:val="ListParagraph"/><w:numPr><w:ilvl w:val="${level}"/><w:numId w:val="1"/></w:numPr><w:ind w:left="${indentLeft}"/></w:pPr><w:r><w:t>${escaped}</w:t></w:r></w:p>`; break;
+            case 'heading1': numberedCounters = {}; xml += `<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr>${runs}</w:p>`; break;
+            case 'heading2': numberedCounters = {}; xml += `<w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr>${runs}</w:p>`; break;
+            case 'heading3': numberedCounters = {}; xml += `<w:p><w:pPr><w:pStyle w:val="Heading3"/></w:pPr>${runs}</w:p>`; break;
+            case 'bullet': numberedCounters = {}; xml += `<w:p><w:pPr><w:pStyle w:val="ListParagraph"/><w:numPr><w:ilvl w:val="${level}"/><w:numId w:val="1"/></w:numPr><w:ind w:left="${indentLeft}"/></w:pPr>${runs}</w:p>`; break;
             case 'numbered':
                 if (!numberedCounters[level]) numberedCounters[level] = 1; else numberedCounters[level]++;
                 Object.keys(numberedCounters).forEach(l => { if (parseInt(l) > level) delete numberedCounters[l]; });
-                xml += `<w:p><w:pPr><w:pStyle w:val="ListParagraph"/><w:numPr><w:ilvl w:val="${level}"/><w:numId w:val="2"/></w:numPr><w:ind w:left="${indentLeft}"/></w:pPr><w:r><w:t>${escaped}</w:t></w:r></w:p>`;
+                xml += `<w:p><w:pPr><w:pStyle w:val="ListParagraph"/><w:numPr><w:ilvl w:val="${level}"/><w:numId w:val="2"/></w:numPr><w:ind w:left="${indentLeft}"/></w:pPr>${runs}</w:p>`;
                 break;
-            case 'quote': numberedCounters = {}; xml += `<w:p><w:pPr><w:pStyle w:val="Quote"/></w:pPr><w:r><w:t>${escaped}</w:t></w:r></w:p>`; break;
-            default: numberedCounters = {}; if (content) xml += `<w:p><w:r><w:t>${escaped}</w:t></w:r></w:p>`; break;
+            case 'quote': numberedCounters = {}; xml += `<w:p><w:pPr><w:pStyle w:val="Quote"/></w:pPr>${runs}</w:p>`; break;
+            default: numberedCounters = {}; if (content) xml += `<w:p>${runs}</w:p>`; break;
         }
     });
 

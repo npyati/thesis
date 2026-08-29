@@ -29,7 +29,7 @@ import {
     initComments, addCommentOnSelection, askClaudeOnSelection, addWholeDocumentComment,
     toggleCommentsPanel,
     renderCommentUI, setComments, setMargin, splitComments, openCommentCount,
-    quickCommentFromTyping, toggleQuickCommentMode, cycleComment,
+    quickCommentFromTyping, toggleQuickCommentMode, cycleComment, replyToActiveComment,
     positionCards,
 } from './comments.js';
 
@@ -659,6 +659,7 @@ const guide = [
         { keys: ['⌘', '⌥', 'M'], name: 'Add comment', detail: 'Select text and add a margin note. Comments are saved right inside the .md file, so they travel with it.' },
         { keys: ['⌘', '⌥', '.'], name: 'Next comment' },
         { keys: ['⌘', '⌥', ','], name: 'Previous comment' },
+        { keys: ['⌘', '⌥', 'R'], name: 'Reply to comment', detail: 'Opens the reply box on the active comment — cycle to a note with ⌘⌥. then reply without touching the mouse. Enter sends the reply; Esc puts the caret back in the text.' },
         { name: 'Ask Claude', detail: 'Address a comment to @claude and the margin answers when it reads. Full Read asks for a read of the whole piece. Claude only ever sees a file you have explicitly invited — consent lives in the file itself, and nothing is sent online otherwise.' },
     ] },
 ];
@@ -789,6 +790,7 @@ const commands = [
     { icon: '◈', name: 'Claude Model', description: 'Choose which model reads the margin — applies to every invited file', action: openModelModal, category: 'Comments' },
     { icon: '›', name: 'Next Comment', description: 'Jump to the next comment in the document (⌘⌥.)', action: () => cycleComment(1), category: 'Comments' },
     { icon: '‹', name: 'Previous Comment', description: 'Jump to the previous comment in the document (⌘⌥,)', action: () => cycleComment(-1), category: 'Comments' },
+    { icon: '↩', name: 'Reply to Comment', description: 'Open the reply box on the active comment (⌘⌥R)', action: replyToActiveComment, category: 'Comments' },
     { icon: '↯', name: 'Toggle Quick Comment Mode', description: 'Select text and just start typing to comment — typing never replaces a selection', action: toggleQuickCommentMode, category: 'Comments' },
     { icon: '◉', name: 'Toggle Comments', description: 'Show or hide margin comments and their highlights', action: toggleCommentsPanel, category: 'Comments' },
 
@@ -1632,9 +1634,10 @@ editor.addEventListener('keydown', (event) => {
     // Cmd+Alt+M — comment on selection (event.code: Alt+M types 'µ' on mac)
     if ((event.ctrlKey || event.metaKey) && event.altKey && event.code === 'KeyM') { event.preventDefault(); addCommentOnSelection(); return; }
 
-    // Cmd+Alt+. / Cmd+Alt+, — cycle through comments
+    // Cmd+Alt+. / Cmd+Alt+, — cycle through comments; Cmd+Alt+R — reply to the active one
     if ((event.ctrlKey || event.metaKey) && event.altKey && event.code === 'Period') { event.preventDefault(); cycleComment(1); return; }
     if ((event.ctrlKey || event.metaKey) && event.altKey && event.code === 'Comma') { event.preventDefault(); cycleComment(-1); return; }
+    if ((event.ctrlKey || event.metaKey) && event.altKey && event.code === 'KeyR') { event.preventDefault(); replyToActiveComment(); return; }
 
     // Quick comment mode: typing over a selection comments instead of replacing
     // ('/' stays reserved for the command menu)
@@ -2283,7 +2286,7 @@ window.__thesisFileDidChange = debounce(() => checkExternalChanges(), 400);
 // Companion pass state, pushed by the shell. Surfaces only in the palette's
 // status row — presence you can check, never presence that interrupts.
 window.__thesisMarginState = (s) => {
-    state.marginActivity = s === 'reading' ? 'reading' : null;
+    state.marginActivity = (s === 'reading' || s === 'checking') ? s : null;
     if (state.commandModalOpen) renderStatusHeader();
 };
 

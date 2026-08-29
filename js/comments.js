@@ -347,16 +347,26 @@ function buildCard(c) {
             c.replies = c.replies || [];
             c.replies.push({ author: 'me', body, created: new Date().toISOString() });
         });
+        refocusEditor();
     };
     ta.addEventListener('keydown', (e) => {
         e.stopPropagation();
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveReply(); }
-        else if (e.key === 'Escape') { e.preventDefault(); replyBox.classList.remove('open'); }
+        else if (e.key === 'Escape') { e.preventDefault(); replyBox.classList.remove('open'); refocusEditor(); }
     });
     card.appendChild(replyBox);
 
     // Icon buttons, right-aligned; the title/aria-label carries the word
     const actions = el('div', 'comment-actions');
+    // An orphaned note's honest repair: the writer, not a heuristic, says
+    // where it belongs now. Select the text, press Re-anchor.
+    if (orphans.has(c.id) && c.quote) {
+        const reBtn = el('button', 'comment-act primary', 'Re-anchor');
+        reBtn.title = 'Attach this note to the currently selected text';
+        reBtn.addEventListener('mousedown', (e) => e.preventDefault());   // keep the editor selection alive
+        reBtn.addEventListener('click', () => reanchorComment(c));
+        actions.appendChild(reBtn);
+    }
     // A comment carrying a preloaded mechanical fix gets a one-press Fix
     // button — the press is the bidding, the change is local, no inference
     if (!c.resolved && c.fix && typeof c.fix.before === 'string' && c.fix.before && typeof c.fix.after === 'string') {
@@ -600,6 +610,43 @@ function focusComment(id, scrollDoc) {
     const card = cards.querySelector(`.comment-card[data-cmt="${id}"]`);
     if (card) card.classList.add('active');
     positionCards();
+}
+
+async function reanchorComment(c) {
+    const sel = window.getSelection();
+    const usable = sel && sel.rangeCount > 0 && !sel.isCollapsed && sel.toString().trim();
+    const resolved = usable ? singleBlockSelection(sel) : null;
+    if (!resolved) {
+        await showAlert('Select the text this note should attach to (within one paragraph), then press Re-anchor.');
+        return;
+    }
+    const start = startOffsetInContent(resolved.content, resolved.range);
+    mutate(() => {
+        c.quote = resolved.range.toString();
+        c.prefix = resolved.content.textContent.slice(Math.max(0, start - 30), start);
+        c.block = allBlocks().indexOf(resolved.content.closest('.block'));
+    });
+}
+
+// Open the reply box on the active card — the keyboard's version of clicking
+// Reply, so cycle-then-respond (⌘⌥. then ⌘⌥R) never needs the mouse.
+export function replyToActiveComment() {
+    if (!commentsVisible()) return;
+    let card = cardsEl() && cardsEl().querySelector('.comment-card.active');
+    if (!card) {
+        cycleComment(1);
+        card = cardsEl() && cardsEl().querySelector('.comment-card.active');
+    }
+    if (!card || card.classList.contains('draft')) return;
+    const box = card.querySelector('.comment-reply-box');
+    const ta = box && box.querySelector('textarea');
+    if (!box || !ta) return;
+    box.classList.add('open');
+    positionCards();
+    ta.focus();
+    // The command-menu path refocuses the editor after the action runs —
+    // reassert (same fallback as the draft composer)
+    requestAnimationFrame(() => { if (document.activeElement !== ta) ta.focus(); });
 }
 
 // Step to the next/previous comment in document order, wrapping at the ends.

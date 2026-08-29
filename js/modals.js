@@ -199,8 +199,10 @@ export function showAlert(message) {
     });
 }
 
-// Promise-based confirm dialog
-export function showConfirm(message) {
+// Promise-based confirm dialog. Pass okText/cancelText when the stakes
+// deserve real labels — a choice that discards work should never ride on
+// remembering which of OK/Cancel meant what.
+export function showConfirm(message, { okText = 'OK', cancelText = 'Cancel' } = {}) {
     return new Promise((resolve) => {
         const dialogModal = document.getElementById('dialog-modal');
         const dialogMessage = document.getElementById('dialog-message');
@@ -208,7 +210,8 @@ export function showConfirm(message) {
         const dialogCancelButton = document.getElementById('dialog-cancel-button');
 
         dialogMessage.textContent = message;
-        dialogConfirmButton.textContent = 'OK';
+        dialogConfirmButton.textContent = okText;
+        dialogCancelButton.textContent = cancelText;
         dialogCancelButton.style.display = 'inline-block';
         dialogModal.classList.remove('hidden');
 
