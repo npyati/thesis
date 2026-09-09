@@ -24,6 +24,7 @@ import {
 import { getRecentFiles } from './db.js';
 import { blocksFromPastedHTML } from './sanitize.js';
 import { recordCheckpoint, scheduleCheckpoint, undo as historyUndo, redo as historyRedo, resetHistory } from './history.js';
+import { initNumbers, toggleParagraphNumbers, toggleSentenceNumbers } from './numbers.js';
 import * as find from './find.js';
 import {
     initComments, addCommentOnSelection, askClaudeOnSelection, addWholeDocumentComment,
@@ -635,6 +636,7 @@ const guide = [
     ] },
     { section: 'Focus & view', entries: [
         { name: 'Fade · Fog · Center focus', detail: 'Fade dims the paragraphs around the one you are on. Fog blurs everything but the active line. Center keeps the active line in the middle of the screen.' },
+        { name: 'Paragraph & sentence numbers', detail: 'Two toggles in the / menu. Paragraph numbers count each paragraph in the left margin; sentence numbers run through the piece like line numbers, anchored to sentences so they never shift with the window or type size. Both are view-only — nothing is added to the document or the file.' },
         { keys: ['⌘', '+'], name: 'Larger text' },
         { keys: ['⌘', '−'], name: 'Smaller text' },
         { keys: ['⌘', ']'], name: 'More line spacing' },
@@ -799,6 +801,8 @@ const commands = [
     { icon: '⛶', name: 'Toggle Fullscreen', description: 'Enter/exit fullscreen mode (F11)', action: toggleFullscreen, category: 'View' },
     { icon: '✓', name: 'Toggle Spellcheck', description: 'Show or hide spelling squiggles', action: toggleSpellcheck, category: 'View' },
     { icon: '№', name: 'Toggle Word Count', description: 'Show/hide word and character count', action: showWordCountToggle, category: 'View' },
+    { icon: '¶', name: 'Toggle Paragraph Numbers', description: 'Count each paragraph in the left margin — view-only, never in the file', action: toggleParagraphNumbers, category: 'View' },
+    { icon: '¹', name: 'Toggle Sentence Numbers', description: 'Faint running numbers at each sentence — stable references that don\'t shift with the window', action: toggleSentenceNumbers, category: 'View' },
     { icon: '◉', name: 'Toggle Comment Count in Pill', description: 'Show the open-comment count beside the word count', action: toggleCommentCountInPill, category: 'View' },
     { icon: 'Aa', name: 'Change Font', description: 'Select font for the editor', action: openFontModal, category: 'View' },
     { icon: 'A+', name: 'Increase Font Size', description: 'Make text larger (Ctrl/Cmd + +)', action: increaseFontSize, category: 'View' },
@@ -1017,6 +1021,8 @@ function renderStatusHeader() {
     if (state.currentDocumentIsEphemeral) modes.push('Ephemeral');
     if (document.body.classList.contains('dark-mode')) modes.push('Dark');
     if (state.wordCountVisible) modes.push('Word count');
+    if (state.paragraphNumbers) modes.push('¶ numbers');
+    if (state.sentenceNumbers) modes.push('Sentence numbers');
     if (state.quickCommentMode) modes.push('Quick comment');
     if (state.marginActivity === 'reading') modes.push('Claude is reading…');
     else if (state.marginActivity === 'checking') modes.push('Claude is checking sources…');
@@ -2307,6 +2313,7 @@ loadFont();
 loadFontSize();
 loadLineHeight();
 loadColumnWidth();
+initNumbers();
 loadCustomFonts();
 
 // Native wrapper only: it exposes the Mac's installed font families, which the

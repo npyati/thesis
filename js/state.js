@@ -4,6 +4,8 @@ const state = {
     commandModalOpen: false,
     slashPosition: null,
     wordCountVisible: false,
+    paragraphNumbers: false,
+    sentenceNumbers: false,
     saveTimeout: null,
     autoSavePending: false,
     savedSelection: null,

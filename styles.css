@@ -516,6 +516,44 @@ body.canvas-mode #editor {
     height: 100%;
 }
 
+/* Paragraph & sentence numbers — a pointer-transparent overlay clipped to the
+   editor's box; chips are laid out in content space and one transform mirrors
+   the scroll. View-only: nothing here exists in the document or the file. */
+#number-overlay {
+    position: fixed;
+    overflow: hidden;
+    pointer-events: none;
+    z-index: 500; /* over the text, under find bar and modals (1000+) */
+    display: none;
+}
+
+#number-layer {
+    position: absolute;
+    top: 0;
+    left: 0;
+}
+
+.num-chip {
+    position: absolute;
+    transform: translateX(-100%);
+    color: #b8b8b8;
+    user-select: none;
+    white-space: nowrap;
+    font-family: 'Helvetica', Arial, sans-serif;
+    font-style: normal;
+    font-weight: normal;
+    font-variant-numeric: tabular-nums;
+}
+
+.num-para { font-size: 0.55em; }
+.num-sent { font-size: 0.45em; }
+
+body.dark-mode .num-chip { color: #5a5a5a; }
+
+/* Numbers are a revising aid — never over invisible text, never on paper */
+body.blind-mode #number-overlay { display: none !important; }
+@media print { #number-overlay { display: none; } }
+
 /* Find bar */
 #find-bar {
     position: fixed;
