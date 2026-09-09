@@ -101,9 +101,12 @@ body.dark-mode #editor blockquote {
     scrollbar-width: none;
 }
 
-/* Block-based structure */
+/* Block-based structure. No vertical margin between blocks: the editor shows
+   exactly the spacing the file has, so a paragraph break looks the same here
+   as anywhere else that opens the .md. Air between paragraphs is a blank line
+   the writer types — a real empty block, saved as a real empty line. */
 .block {
-    margin: 0.5em 0;
+    margin: 0;
     position: relative;
     display: flex;
     align-items: flex-start;
@@ -138,27 +141,6 @@ body.dark-mode #editor blockquote {
 .block-bullet .block-content,
 .block-numbered .block-content {
     padding-left: 0;
-}
-
-/* Reduce spacing between consecutive bullets/numbers */
-.block-bullet + .block-bullet,
-.block-numbered + .block-numbered {
-    margin-top: 0.25em;
-}
-
-/* Paragraph spacing (toggle): a blank line's worth of air between blocks,
-   purely visual — no empty line exists in the document. 1lh tracks the
-   line-height setting; the em value is a fallback for engines without lh
-   (1.6 mirrors the default line-height). */
-body.paragraph-spacing .block + .block {
-    margin-top: 2.1em;
-    margin-top: calc(0.5em + 1lh);
-}
-
-/* Consecutive list items keep their tight rhythm — the air is between paragraphs */
-body.paragraph-spacing .block-bullet + .block-bullet,
-body.paragraph-spacing .block-numbered + .block-numbered {
-    margin-top: 0.25em;
 }
 
 /* Heading block styles */

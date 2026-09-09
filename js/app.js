@@ -95,13 +95,6 @@ function decreaseColumnWidth() { state.currentColumnWidth = Math.max(state.curre
 function applyColumnWidth() { document.documentElement.style.setProperty('--column-width', state.currentColumnWidth + 'px'); localStorage.setItem('editorColumnWidth', state.currentColumnWidth); positionCards(); }
 function loadColumnWidth() { const w = localStorage.getItem('editorColumnWidth'); if (w) { state.currentColumnWidth = parseInt(w); document.documentElement.style.setProperty('--column-width', state.currentColumnWidth + 'px'); } }
 
-function toggleParagraphSpacing() {
-    state.paragraphSpacing = !state.paragraphSpacing;
-    document.body.classList.toggle('paragraph-spacing', state.paragraphSpacing);
-    localStorage.setItem('paragraphSpacing', state.paragraphSpacing);
-    positionCards();
-}
-
 // ──────────────────────────────────
 // Word count (debounced)
 // ──────────────────────────────────
@@ -646,7 +639,6 @@ const guide = [
         { keys: ['⌘', '−'], name: 'Smaller text' },
         { keys: ['⌘', ']'], name: 'More line spacing' },
         { keys: ['⌘', '['], name: 'Less line spacing' },
-        { name: 'Paragraph spacing', detail: 'Adds a blank line of visual space between paragraphs without changing the document itself. Toggle it from the command menu.' },
         { keys: ['⌘', '⇧', ']'], name: 'Wider column' },
         { keys: ['⌘', '⇧', '['], name: 'Narrower column' },
         { keys: ['F11'], name: 'Fullscreen' },
@@ -813,7 +805,6 @@ const commands = [
     { icon: 'A−', name: 'Decrease Font Size', description: 'Make text smaller (Ctrl/Cmd + -)', action: decreaseFontSize, category: 'View' },
     { icon: '↕︎', name: 'Increase Line Height', description: 'Make text more spacious (Ctrl/Cmd + ])', action: increaseLineHeight, category: 'View' },
     { icon: '↕︎', name: 'Decrease Line Height', description: 'Make text more compact (Ctrl/Cmd + [)', action: decreaseLineHeight, category: 'View' },
-    { icon: '¶', name: 'Toggle Paragraph Spacing', description: 'Add a blank line of visual space between paragraphs — the text itself is unchanged', action: toggleParagraphSpacing, category: 'View' },
     { icon: '↔︎', name: 'Widen Text Column', description: 'Make the text column wider (Ctrl/Cmd + Shift + ])', action: increaseColumnWidth, category: 'View' },
     { icon: '↔︎', name: 'Narrow Text Column', description: 'Make the text column narrower (Ctrl/Cmd + Shift + [)', action: decreaseColumnWidth, category: 'View' },
 
@@ -1563,9 +1554,10 @@ editor.addEventListener('keydown', (event) => {
         if (rects.length > 0) {
             const cr = rects[0];
             const lh = parseInt(window.getComputedStyle(ce).lineHeight) || 20;
-            // Probe only while the point stays inside this block: in the wider
-            // paragraph-spacing gap the hit test snaps back to the caret's own
-            // line, and the caret would stall instead of crossing blocks.
+            // Probe only while the point stays inside this block: in an
+            // inter-block gap (heading/quote margins) the hit test snaps back
+            // to the caret's own line, and the caret would stall instead of
+            // crossing blocks.
             if (cr.top - lh >= ce.getBoundingClientRect().top) {
                 const tr = document.caretRangeFromPoint(cr.left, cr.top - lh);
                 if (tr && ce.contains(tr.startContainer)) { event.preventDefault(); sel.removeAllRanges(); sel.addRange(tr); return; }
@@ -2253,7 +2245,6 @@ if (localStorage.getItem('canvasMode') === 'true') document.body.classList.add('
 if (localStorage.getItem('forwardOnlyMode') === 'true') { state.forwardOnlyMode = true; document.body.classList.add('forward-only-mode'); }
 if (localStorage.getItem('centerMode') === 'true') { state.centerMode = true; document.body.classList.add('center-mode'); }
 if (localStorage.getItem('focusMode') === 'true') { state.focusMode = true; document.body.classList.add('focus-mode'); }
-if (localStorage.getItem('paragraphSpacing') === 'true') { state.paragraphSpacing = true; document.body.classList.add('paragraph-spacing'); }
 const savedLimit = localStorage.getItem('ephemeralWordLimit');
 if (savedLimit) { const p = parseInt(savedLimit, 10); if (!isNaN(p) && p > 0) state.EPHEMERAL_WORD_LIMIT = p; }
 if (localStorage.getItem('wordCountVisible') === 'true') { state.wordCountVisible = true; document.getElementById('word-count-display').classList.remove('hidden'); }
