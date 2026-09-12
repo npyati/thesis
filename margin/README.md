@@ -6,6 +6,18 @@ pass through Claude CLI and writes any notes back into the file's comment
 block. thesis shows them the moment the file changes, even while the window
 stays focused.
 
+## What it needs
+
+- **[Claude Code](https://claude.com/claude-code)** on your PATH, signed in —
+  run `claude` once and log in. Passes run under that login: no API key, no
+  account, nothing configured here.
+- **Node 18 or newer**, to run this file.
+
+thesis checks for both when you invite a file and tells you which one is
+missing, so a silent non-reading companion isn't a state you can end up in.
+Install what's missing and reopen thesis. Everything else in the editor works
+without either.
+
 **You normally never run this by hand.** thesis.app hosts it: when the open
 file is invited (`/` → Invite Claude), the shell attaches a companion to that
 file; revoke, close the file, or quit and it's gone. The companion holds a

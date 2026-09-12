@@ -166,7 +166,8 @@ export function syncMarginProcess() {
 }
 
 // ── Comment-only external changes ──
-// The margin companion (and any other tool that speaks the format) write comments while thesis may
+// The margin companion (and any other tool that speaks the format) writes
+// comments while thesis may
 // hold unsaved prose edits. When the disk change left the prose alone, merge
 // the comment blocks in place — no reload, no dialog, the caret never moves.
 
@@ -385,7 +386,7 @@ export async function quickSave() {
 async function loadFileIntoEditor(fileHandle, fileName = null) {
     const file = await fileHandle.getFile();
     const markdownContent = await file.text();
-    // Lift the thesis comment and margin blocks out before parsing — comments
+    // Lift the comment and margin blocks out before parsing — comments
     // render as margin notes, never as prose
     const { prose, comments, raw, margin, marginRaw } = splitComments(markdownContent);
     const blocks = markdownToBlocks(prose);
@@ -562,7 +563,7 @@ export function blocksToMarkdown() {
     return htmlToMarkdown(getEditor().innerHTML);
 }
 
-// Full document for file writes: prose plus the thesis comment and margin
+// Full document for file writes: prose plus the comment and margin
 // blocks (if any). Clipboard copies and Word export stay prose-only.
 export function serializeDocument() {
     syncAnchorsFromDOM();

@@ -112,7 +112,7 @@ const log = (msg) => console.log(`[margin ${new Date().toTimeString().slice(0, 8
 const vlog = (msg) => { if (opts.verbose) log(msg); };
 
 // ──────────────────────────────────
-// The thesis file format (mirrors thesis's js/comments.js exactly)
+// The comment-block format (mirrors thesis's js/comments.js exactly)
 // ──────────────────────────────────
 const MARK_START = '<!-- thesis:comments v1';
 const BLOCK_RE = /^<!--\s*thesis:comments v1\s*\n([\s\S]*?)\n-->\s*$/;
@@ -751,7 +751,7 @@ function attach(file) {
 // Go
 // ──────────────────────────────────
 // Exported for format-test.js, which asserts this file and thesis's
-// js/comments.js still speak the same thesis format.
+// js/comments.js still speak the same format.
 module.exports = { splitMargin, splitComments, serializeFile, renderBlocks, changedWordCount, threadsNeedingAnswer };
 
 if (require.main === module) {

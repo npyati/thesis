@@ -21,8 +21,12 @@ scheme. The only native additions:
 open build/thesis.app
 ```
 
-Requires Xcode command-line tools. The app is ad-hoc signed — fine for
-personal use; notarize before distributing.
+Requires macOS 13 or later and the Xcode command-line tools
+(`xcode-select --install`). No other dependencies.
+
+The app is ad-hoc signed, which is all a locally built app needs to run —
+notarization only matters if you distribute the built bundle to other
+machines.
 
 ## Notes
 
@@ -33,3 +37,7 @@ personal use; notarize before distributing.
 - macOS may ask once for access to Documents/Desktop the first time a
   remembered file in those folders is reopened.
 - Rebuild after changing any web file — the bundle is a snapshot.
+- `AppIcon-1024.png` is generated, not hand-drawn. To regenerate it:
+  `swift icon.swift stroke 1024 AppIcon-1024.png --margin 0.1` — the 0.1 margin
+  is what leaves room for the shadow macOS expects around a 1024 master.
+  `stroke-dark` is the same mark inverted onto a near-black tile.

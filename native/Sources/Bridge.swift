@@ -86,6 +86,10 @@ final class NativeBridge: NSObject, WKScriptMessageHandlerWithReply,
     private var marginStdin: Pipe?
     private var marginFilePath: String?
     private var marginModel: String?
+    private var marginRequest: String?        // path the editor currently wants attached
+    private var marginPending: String?        // a start already waiting on the preflight
+    private var marginMissingTool: String??   // nil = not looked yet; .some(nil) = both present
+    private var marginNoticeShown = false
 
     private func shellQuoted(_ s: String) -> String {
         "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
@@ -99,6 +103,51 @@ final class NativeBridge: NSObject, WKScriptMessageHandlerWithReply,
         }
     }
 
+    private func notifyMarginUnavailable(_ tool: String) {
+        DispatchQueue.main.async { [weak self] in
+            self?.watchWebView?.evaluateJavaScript(
+                "window.__thesisMarginUnavailable && window.__thesisMarginUnavailable('\(tool)')",
+                completionHandler: nil)
+        }
+    }
+
+    // The companion runs on the writer's own tools: node to execute it, the
+    // claude CLI to read. Neither ships with thesis, and a missing one would
+    // otherwise surface as a child that exits 127 — an invitation that sits
+    // there doing nothing, with the reason buried in Console. Look for them
+    // the same way the companion is launched (a login shell, so the writer's
+    // PATH applies), off the main thread because a login shell is not free.
+    // The answer is cached for the run: a tool installed afterwards is picked
+    // up on the next launch, which is what the notice tells the writer.
+    private func checkMarginTools(_ done: @escaping (String?) -> Void) {
+        if let cached = marginMissingTool { done(cached); return }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            proc.arguments = ["-lc",
+                "for t in node claude; do command -v $t >/dev/null 2>&1 || { print -r -- $t; break; }; done"]
+            let out = Pipe()
+            proc.standardOutput = out
+            proc.standardError = Pipe()
+            var missing: String?
+            var conclusive = false
+            if (try? proc.run()) != nil {
+                let data = out.fileHandleForReading.readDataToEndOfFile()
+                proc.waitUntilExit()
+                let name = String(data: data, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                missing = name.isEmpty ? nil : name
+                conclusive = true
+            }
+            DispatchQueue.main.async {
+                // An unlaunchable shell tells us nothing — don't cache that,
+                // and let the spawn below try anyway.
+                if conclusive { self?.marginMissingTool = .some(missing) }
+                done(missing)
+            }
+        }
+    }
+
     func stopMarginProcess() {
         marginStdin?.fileHandleForWriting.closeFile()   // child exits on stdin close
         marginProcess?.terminate()                      // belt and braces
@@ -106,20 +155,47 @@ final class NativeBridge: NSObject, WKScriptMessageHandlerWithReply,
         marginStdin = nil
         marginFilePath = nil
         marginModel = nil
+        marginRequest = nil
     }
 
     private func startMarginProcess(for filePath: String, model: String?) {
         // A model change is a different reader — restart rather than leave the
         // old companion attached.
         if let p = marginProcess, p.isRunning, marginFilePath == filePath, marginModel == model { return }
-        stopMarginProcess()
-        marginModel = model
         guard let marginJS = Bundle.main.resourceURL?
                 .appendingPathComponent("margin/margin.js").path,
               FileManager.default.fileExists(atPath: marginJS) else {
             NSLog("thesis: margin.js not bundled — companion unavailable")
             return
         }
+        // syncMarginProcess fires on load, save, invite and model change, so two
+        // starts can queue behind one preflight. Collapse the identical ones; a
+        // genuine model change still gets through and wins by arriving second.
+        let want = filePath + "\u{0}" + (model ?? "")
+        if marginPending == want { return }
+        marginRequest = filePath
+        marginPending = want
+        checkMarginTools { [weak self] missing in
+            guard let self else { return }
+            if self.marginPending == want { self.marginPending = nil }
+            guard self.marginRequest == filePath else { return }   // revoked while we looked
+            if let missing {
+                NSLog("thesis: margin unavailable — %@ not found on PATH", missing)
+                // Say it once a run; syncMarginProcess fires on every save.
+                if !self.marginNoticeShown {
+                    self.marginNoticeShown = true
+                    self.notifyMarginUnavailable(missing)
+                }
+                return
+            }
+            self.spawnMarginProcess(for: filePath, model: model, marginJS: marginJS)
+        }
+    }
+
+    private func spawnMarginProcess(for filePath: String, model: String?, marginJS: String) {
+        stopMarginProcess()
+        marginRequest = filePath
+        marginModel = model
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
         var command = "exec node \(shellQuoted(marginJS)) --attach \(shellQuoted(filePath))"

@@ -1,8 +1,11 @@
 // Margin comments — notes that live in the document, not in a sidecar.
 //
 // Comments are stored in state.comments and written back into the .md file as a
-// single delimited HTML-comment block (see splitComments/getCommentBlock), the
-// same format any other tool can read, so files round-trip between them.
+// single delimited HTML-comment block (see splitComments/getCommentBlock). The
+// block is tagged `thesis:comments v1`. Any tool that reads the marker sees the
+// same notes, and the file still renders cleanly anywhere, since a markdown
+// renderer drops HTML comments. The tag is on disk in written files, so treat
+// it as a published format: bump the version rather than change its shape.
 //
 // Highlights are <mark class="cmt"> elements wrapped around the quoted text.
 // They are DERIVED state: never serialized (history and localStorage strip
@@ -44,7 +47,7 @@ function newId() {
 }
 
 // ──────────────────────────────────
-// Storage format (the thesis:comments v1 block)
+// Storage format (the `thesis:comments v1` block — see the header)
 // margin/margin.js carries its own copy of this parser; any change here must
 // keep the two in agreement — `node margin/format-test.js` checks that.
 // ──────────────────────────────────

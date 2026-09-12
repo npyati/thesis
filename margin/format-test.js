@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The thesis file format lives in two implementations — thesis's
+// The comment-block format lives in two implementations — thesis's
 // js/comments.js (browser ESM) and margin.js (node CJS) — that must stay
 // byte-compatible: what one writes, the other reads back identically. This
 // test pins that agreement. Run it after touching either parser:
@@ -100,5 +100,5 @@ const CASES = {
         assert.strictEqual(parsed.prose, 'prose', `${name}: prose mangled by margin block`);
     }
 
-    console.log('format-test: all checks passed — thesis and margin agree on the thesis format');
+    console.log('format-test: all checks passed — thesis and margin agree on the comment format');
 })().catch((e) => { console.error(e.message); process.exit(1); });

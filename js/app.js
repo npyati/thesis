@@ -425,7 +425,8 @@ async function toggleClaudeInvitation() {
     if (!invited) {
         const ok = await showConfirm(
             'Invite Claude to read this file? While the invitation stands, ' +
-            'this file and its comments are sent to Anthropic under your account. ' +
+            'this file and its comments are sent to Anthropic under your own Claude Code ' +
+            'login — which has to be installed and signed in on this Mac, along with Node. ' +
             'Revoke any time with this same command.'
         );
         if (!ok) return;
@@ -601,7 +602,7 @@ function moveBlocks(direction) {
 // ──────────────────────────────────
 // Intro
 // ──────────────────────────────────
-const introHTML = `<p><strong>thesis</strong> is a minimalist text editor, designed for focus and creativity.</p><p>It works through the keyboard — you shouldn't need the mouse. Type <strong>/</strong> to open the command menu, then search or use the arrow keys and press <strong>[enter]</strong>. Type <strong>/</strong> again to close it (press <strong>[space]</strong> at the empty prompt to keep a literal /).</p><p>Your writing saves automatically as you type — you never need to reach for Save. It's kept on this machine, and you can also <em>Open File</em> or <em>Save to File As…</em> to sync a real <strong>.md</strong> file on disk. Nothing is ever sent online.</p><p>There are a few different ways to write, all in the / menu:</p><ul><li><strong>Stages</strong> — Draft, Revise, and Polish set the editor up for each phase of writing.</li><li><strong>Forward-only</strong> — type like a typewriter, with no going back.</li><li><strong>Blind</strong> — write without seeing anything; a running word count keeps you company.</li><li><strong>Ephemeral</strong> — the oldest words fade away as new ones arrive, leaving no record.</li><li><strong>Retype</strong> — redraft by retyping your old draft one paragraph at a time.</li><li><strong>Focus</strong> — fade or blur everything but the line you're on, or keep it centered.</li></ul><p>There's more to find — fonts, dark mode, find, margin comments (select text, <strong>⌘⌥M</strong>), export to Markdown or Word — but that's enough to start. There isn't much here, just what's necessary.</p><p>For every shortcut and a note on each way of writing, open <a href="#" id="intro-guide-link"><strong>Shortcuts &amp; Guide</strong></a> — or press <strong>/</strong> and search for it.</p><p><strong>This is a work in progress.</strong> Send me a note if you have ideas.</p>`;
+const introHTML = `<p><strong>thesis</strong> is a minimalist text editor, designed for focus and creativity.</p><p>It works through the keyboard — you shouldn't need the mouse. Type <strong>/</strong> to open the command menu, then search or use the arrow keys and press <strong>[enter]</strong>. Type <strong>/</strong> again to close it (press <strong>[space]</strong> at the empty prompt to keep a literal /).</p><p>Your writing saves automatically as you type — you never need to reach for Save. It's kept on this machine, and you can also <em>Open File</em> or <em>Save to File As…</em> to sync a real <strong>.md</strong> file on disk. Nothing is sent online unless you explicitly invite Claude to read a file.</p><p>There are a few different ways to write, all in the / menu:</p><ul><li><strong>Stages</strong> — Draft, Revise, and Polish set the editor up for each phase of writing.</li><li><strong>Forward-only</strong> — type like a typewriter, with no going back.</li><li><strong>Blind</strong> — write without seeing anything; a running word count keeps you company.</li><li><strong>Ephemeral</strong> — the oldest words fade away as new ones arrive, leaving no record.</li><li><strong>Retype</strong> — redraft by retyping your old draft one paragraph at a time.</li><li><strong>Focus</strong> — fade or blur everything but the line you're on, or keep it centered.</li></ul><p>There's more to find — fonts, dark mode, find, margin comments (select text, <strong>⌘⌥M</strong>), export to Markdown or Word — but that's enough to start. There isn't much here, just what's necessary.</p><p>For every shortcut and a note on each way of writing, open <a href="#" id="intro-guide-link"><strong>Shortcuts &amp; Guide</strong></a> — or press <strong>/</strong> and search for it.</p><p><strong>This is a work in progress.</strong> Send me a note if you have ideas.</p>`;
 
 function showIntro() {
     document.getElementById('intro-text').innerHTML = introHTML;
@@ -654,7 +655,7 @@ const guide = [
         { keys: ['⌘', '⌥', '.'], name: 'Next comment' },
         { keys: ['⌘', '⌥', ','], name: 'Previous comment' },
         { keys: ['⌘', '⌥', 'R'], name: 'Reply to comment', detail: 'Opens the reply box on the active comment — cycle to a note with ⌘⌥. then reply without touching the mouse. Enter sends the reply; Esc puts the caret back in the text.' },
-        { name: 'Ask Claude', detail: 'Address a comment to @claude and the margin answers when it reads. Full Read asks for a read of the whole piece. Claude only ever sees a file you have explicitly invited — consent lives in the file itself, and nothing is sent online otherwise.' },
+        { name: 'Ask Claude', detail: 'Address a comment to @claude and the margin answers when it reads. Full Read asks for a read of the whole piece. Claude only ever sees a file you have explicitly invited — consent lives in the file itself, and nothing is sent online otherwise. The reading runs on your own machine through Claude Code (and Node); if either is missing, thesis tells you when you invite a file.' },
     ] },
 ];
 
@@ -2285,6 +2286,17 @@ window.__thesisFileDidChange = debounce(() => checkExternalChanges(), 400);
 window.__thesisMarginState = (s) => {
     state.marginActivity = (s === 'reading' || s === 'checking') ? s : null;
     if (state.commandModalOpen) renderStatusHeader();
+};
+
+// The companion isn't ours to provide — it runs on the writer's own Node and
+// their own Claude Code login. When the shell can't find one of them it says so
+// here, once a run, rather than leaving an invitation that quietly does nothing.
+// The invitation stays in the file, so installing the tool and reopening is all
+// it takes.
+window.__thesisMarginUnavailable = (tool) => {
+    showAlert(tool === 'claude'
+        ? 'Claude isn’ reading this file: the Claude Code CLI isn’ installed, or isn’ on your PATH. Install it from claude.com/claude-code, run `claude` once to sign in, then reopen thesis. The invitation stays in the file until then.'
+        : 'Claude isn’ reading this file: the margin companion runs on Node, and Node isn’ installed (or isn’ on your PATH). Install Node 18 or newer, then reopen thesis. The invitation stays in the file until then.');
 };
 
 // Keep the optional pill count honest whenever the margin changes
