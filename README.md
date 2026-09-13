@@ -1,6 +1,6 @@
 # thesis
 
-A minimalist text editor, designed for focus.
+A minimalist writing app, designed for focus.
 
 thesis works through the keyboard — you shouldn't need the mouse. Type `/` to open the command menu, then search, or arrow to what you want and press enter. Your writing saves automatically as you type, stays on your machine, and nothing is sent online — unless you explicitly invite Claude to read a file ([see below](#claude-in-the-margin)).
 
@@ -30,13 +30,13 @@ It runs on your own machine, on your own tools:
 - **[Claude Code](https://claude.com/claude-code)**, installed and signed in (run `claude` once). Passes go out under your own login — no API keys, no account here.
 - **Node 18 or newer**, which runs the companion.
 
-If either is missing, thesis says so when you invite a file rather than sitting there quietly doing nothing. Neither is needed for anything else in the editor.
+If either is missing, thesis says so when you invite a file rather than sitting there quietly doing nothing. Neither is needed for anything else in the app.
 
 Consent is file-level and lives *in the file* — inviting writes a marker into the `.md` itself, so it travels with the document and nothing unmarked is ever read. Revoke with the same command. The reading pass has no tools at all: it cannot run a command, open another file, or reach the network. Invited files (and their comments) do go to Anthropic; nothing else does. [margin/README.md](margin/README.md) is the full account, including the narrow second pass that can check a fact and the `--no-lookups` flag that turns it off.
 
 ## Your writing stays yours
 
-The working draft autosaves to the app's own local storage, and you can open or create a real `.md` file on disk — thesis keeps it in sync as you write. There is no server, no account, and no analytics, and the editor itself talks to nothing. The one exception is a file you invite Claude to read, which is described above and off by default.
+The working draft autosaves to the app's own local storage, and you can open or create a real `.md` file on disk — thesis keeps it in sync as you write. There is no server, no account, and no analytics, and the app itself talks to nothing. The one exception is a file you invite Claude to read, which is described above and off by default.
 
 The sync works in both directions: if another app changes the connected file — an agent replying to comments, another editor — thesis picks the changes up when its window regains focus (or via `/` → *Reload File*), and leaving the window writes pending edits out immediately. If both sides changed at once, thesis asks which version wins rather than silently overwriting either.
 

@@ -15,7 +15,7 @@ stays focused.
 
 thesis checks for both when you invite a file and tells you which one is
 missing, so a silent non-reading companion isn't a state you can end up in.
-Install what's missing and reopen thesis. Everything else in the editor works
+Install what's missing and reopen thesis. Everything else in the app works
 without either.
 
 **You normally never run this by hand.** thesis.app hosts it: when the open
